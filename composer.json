@@ -1,0 +1,54 @@
+{
+    "$schema": "https://getcomposer.org/schema.json",
+    "name": "codeguardian/laravel",
+    "description": "CodeGuardian AI — Analyze, test, refactor and secure your Laravel & Flutter projects via artisan commands.",
+    "keywords": ["laravel", "ai", "code-analysis", "static-analysis", "testing", "security", "refactoring"],
+    "homepage": "https://codeguardian.ai",
+    "license": "MIT",
+    "type": "library",
+    "authors": [
+        {
+            "name": "CodeGuardian AI",
+            "email": "hello@codeguardian.ai",
+            "homepage": "https://codeguardian.ai"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "illuminate/console": "^9.0|^10.0|^11.0",
+        "illuminate/support": "^9.0|^10.0|^11.0",
+        "illuminate/filesystem": "^9.0|^10.0|^11.0",
+        "guzzlehttp/guzzle": "^7.2",
+        "nikic/php-parser": "^4.18|^5.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^7.0|^8.0|^9.0",
+        "phpunit/phpunit": "^9.5|^10.0|^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "CodeGuardian\\Laravel\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "CodeGuardian\\Laravel\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "CodeGuardian\\Laravel\\CodeGuardianServiceProvider"
+            ],
+            "aliases": {
+                "CodeGuardian": "CodeGuardian\\Laravel\\Facades\\CodeGuardian"
+            }
+        }
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
