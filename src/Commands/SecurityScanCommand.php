@@ -91,10 +91,36 @@ class SecurityScanCommand extends Command
             $this->info('  ✅  No security issues found!');
         }
 
-        if ($outputDir = $this->option('output')) {
-            $reportData = ['agent_results' => ['security' => $result], 'summary' => $result['summary']];
-            $paths      = $formatter->save($reportData, $outputDir, 'json');
-            $this->info('📄 Report saved: ' . implode(', ', $paths));
+        // Always save HTML + JSON reports (same as codeguardian:analyze)
+        $outputDir  = $this->option('output')
+            ?: storage_path(config('codeguardian.output.report_dir', 'codeguardian/reports'));
+
+        $reportData = [
+            'project_name'  => basename($path),
+            'project_type'  => $type,
+            'scanned_at'    => now()->toISOString(),
+            'overall_score' => $score,
+            'engine'        => 'static',
+            'files_scanned' => count($files),
+            'total_lines'   => array_sum(array_map(fn($c) => substr_count($c, "\n") + 1, $files)),
+            'scores'        => ['security_score' => $score],
+            'agent_results' => ['security' => $result],
+            'summary'       => [
+                'total_files'   => count($files),
+                'total_lines'   => array_sum(array_map(fn($c) => substr_count($c, "\n") + 1, $files)),
+                'total_issues'  => count($findings),
+                'critical'      => $counts['critical'],
+                'high'          => $counts['high'],
+                'medium'        => $counts['medium'] ?? 0,
+                'low'           => $counts['low'] ?? 0,
+            ],
+        ];
+
+        $paths = $formatter->save($reportData, $outputDir, 'both');
+        $this->newLine();
+        $this->info('📄 Reports saved:');
+        foreach ($paths as $p) {
+            $this->line("   → {$p}");
         }
 
         $failCounts = match ($failOn) {

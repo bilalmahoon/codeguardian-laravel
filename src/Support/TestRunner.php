@@ -15,25 +15,18 @@ class TestRunner
     public function __construct(string $projectRoot)
     {
         $this->projectRoot = rtrim($projectRoot, '/');
-        $this->timeout     = config('codeguardian.analysis.test_timeout', 120);
+
+        try {
+            $this->timeout = (int) config('codeguardian.analysis.test_timeout', 120);
+        } catch (\Throwable) {
+            $this->timeout = 120;
+        }
     }
 
     // ─── Public API ──────────────────────────────────────────────────────────
 
     /**
      * Run tests at a specific path (file or directory).
-     *
-     * @return array{
-     *   passed: bool,
-     *   total: int,
-     *   passed_count: int,
-     *   failed_count: int,
-     *   errors: int,
-     *   failures: array,
-     *   output: string,
-     *   duration_ms: int,
-     *   exit_code: int
-     * }
      */
     public function run(string $testPath, string $type = 'laravel'): array
     {
@@ -47,6 +40,103 @@ class TestRunner
             'duration_ms' => $ms,
             'exit_code'   => $output['exit_code'],
             'command'     => $command,
+        ]);
+    }
+
+    /**
+     * Run ONLY the CodeGuardian-generated test stubs (tests/CodeGuardian/).
+     * Returns skipped:true when the directory is empty or missing.
+     */
+    public function runCodeGuardianTests(string $type = 'laravel'): array
+    {
+        try {
+            $testsSubDir = config('codeguardian.output.tests_dir', 'tests/CodeGuardian');
+        } catch (\Throwable) {
+            $testsSubDir = 'tests/CodeGuardian';
+        }
+        $dir = $this->projectRoot . '/' . $testsSubDir;
+
+        if (! is_dir($dir) || $this->isDirEmpty($dir)) {
+            return $this->skippedResult('No CodeGuardian tests found yet.');
+        }
+
+        return $this->run($dir, $type);
+    }
+
+    /**
+     * Run the project's existing tests (tests/Feature/, tests/Unit/),
+     * EXCLUDING tests/CodeGuardian/ which are generated stubs.
+     *
+     * This is the critical breaking-change detector: if a refactoring
+     * breaks a pre-existing test, this run catches it immediately.
+     *
+     * @param  string[] $onlyDirs  Whitelist of sub-dirs to run (e.g. ['Feature', 'Unit']).
+     *                             Defaults to all sub-dirs except CodeGuardian.
+     */
+    public function runExistingProjectTests(string $type = 'laravel', array $onlyDirs = []): array
+    {
+        $testsRoot = $this->projectRoot . '/tests';
+
+        if (! is_dir($testsRoot)) {
+            return $this->skippedResult('No tests/ directory found in project.');
+        }
+
+        // Collect test dirs to run, skipping CodeGuardian generated stubs
+        $dirsToRun = [];
+        try {
+            $cgDirName = basename(config('codeguardian.output.tests_dir', 'tests/CodeGuardian'));
+        } catch (\Throwable) {
+            $cgDirName = 'CodeGuardian';
+        }
+
+        foreach (new \DirectoryIterator($testsRoot) as $item) {
+            if (! $item->isDir() || $item->isDot()) {
+                continue;
+            }
+            $name = $item->getFilename();
+            if ($name === $cgDirName) {
+                continue; // skip CodeGuardian folder — has its own run
+            }
+            if (! empty($onlyDirs) && ! in_array($name, $onlyDirs, true)) {
+                continue;
+            }
+            $dirsToRun[] = $item->getPathname();
+        }
+
+        if (empty($dirsToRun)) {
+            // Fall back to running the full tests/ root if no sub-dirs found
+            if (! $this->isDirEmpty($testsRoot)) {
+                return $this->run($testsRoot, $type);
+            }
+            return $this->skippedResult('No existing test directories found (Feature, Unit, etc.).');
+        }
+
+        // Run each sub-dir and merge results
+        $combined = null;
+        foreach ($dirsToRun as $dir) {
+            $result   = $this->run($dir, $type);
+            $combined = $combined === null ? $result : $this->mergeResults($combined, $result);
+        }
+
+        return $combined ?? $this->skippedResult('No existing tests to run.');
+    }
+
+    /**
+     * Run BOTH CodeGuardian tests AND existing project tests.
+     * Returns a combined result — if either fails, combined passes:false.
+     *
+     * Used after each refactoring step for a full safety check.
+     */
+    public function runAll(string $type = 'laravel'): array
+    {
+        $cgResult      = $this->runCodeGuardianTests($type);
+        $existingResult = $this->runExistingProjectTests($type);
+
+        return $this->mergeResults($cgResult, $existingResult, [
+            'sources' => [
+                'codeguardian' => $cgResult,
+                'existing'     => $existingResult,
+            ],
         ]);
     }
 
@@ -75,6 +165,64 @@ class TestRunner
         }
 
         return $this->run($testDir);
+    }
+
+    // ─── Result helpers ───────────────────────────────────────────────────────
+
+    /**
+     * Merge two test run results into one combined summary.
+     * passed:true only when BOTH results pass.
+     */
+    public function mergeResults(array $a, array $b, array $extra = []): array
+    {
+        // If either is just a skipped result, return the other
+        if ($a['skipped'] ?? false) {
+            return array_merge($b, $extra);
+        }
+        if ($b['skipped'] ?? false) {
+            return array_merge($a, $extra);
+        }
+
+        return array_merge([
+            'passed'        => ($a['passed'] ?? true) && ($b['passed'] ?? true),
+            'skipped'       => false,
+            'total'         => ($a['total'] ?? 0) + ($b['total'] ?? 0),
+            'passed_count'  => ($a['passed_count'] ?? 0) + ($b['passed_count'] ?? 0),
+            'failed_count'  => ($a['failed_count'] ?? 0) + ($b['failed_count'] ?? 0),
+            'errors'        => ($a['errors'] ?? 0) + ($b['errors'] ?? 0),
+            'failures'      => array_merge($a['failures'] ?? [], $b['failures'] ?? []),
+            'duration_ms'   => ($a['duration_ms'] ?? 0) + ($b['duration_ms'] ?? 0),
+            'output'        => ($a['output'] ?? '') . "\n---\n" . ($b['output'] ?? ''),
+        ], $extra);
+    }
+
+    private function skippedResult(string $reason = ''): array
+    {
+        return [
+            'passed'        => true,
+            'skipped'       => true,
+            'total'         => 0,
+            'passed_count'  => 0,
+            'failed_count'  => 0,
+            'errors'        => 0,
+            'failures'      => [],
+            'duration_ms'   => 0,
+            'output'        => $reason,
+            'reason'        => $reason,
+        ];
+    }
+
+    private function isDirEmpty(string $dir): bool
+    {
+        if (! is_dir($dir)) {
+            return true;
+        }
+        foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($dir, \RecursiveDirectoryIterator::SKIP_DOTS)) as $f) {
+            if ($f->isFile() && $f->getExtension() === 'php') {
+                return false;
+            }
+        }
+        return true;
     }
 
     // ─── Private helpers ─────────────────────────────────────────────────────
@@ -195,7 +343,22 @@ class TestRunner
         }
 
         $passedCount = $passedCount ?: max(0, $total - $failedCount - $errors);
-        $passed      = ($failedCount === 0 && $errors === 0 && $total > 0) || str_contains($output, 'OK (');
+
+        // 0 tests found is NOT a failure — the generated stubs may have no test
+        // methods yet. Treat as skipped so the refactoring workflow continues.
+        if ($total === 0 && $failedCount === 0 && $errors === 0) {
+            return [
+                'passed'        => true,
+                'skipped'       => true,
+                'total'         => 0,
+                'passed_count'  => 0,
+                'failed_count'  => 0,
+                'errors'        => 0,
+                'failures'      => [],
+            ];
+        }
+
+        $passed = ($failedCount === 0 && $errors === 0 && $total > 0) || str_contains($output, 'OK (');
 
         // Extract individual failure messages
         preg_match_all('/\d+\)\s+(.+?)\n(.+?)\nFailed/s', $output, $failMatches);

@@ -44,8 +44,21 @@ class ReportFormatter
         $type     = e($results['project_type'] ?? 'laravel');
         $scanned  = e($results['scanned_at'] ?? now()->toISOString());
         $overall  = $results['overall_score'] ?? 'N/A';
-        $summary  = $results['summary'] ?? [];
         $scores   = $results['scores'] ?? [];
+
+        // Normalise summary — provide defaults for every key the template uses
+        // so a missing key never crashes report generation.
+        $summary = array_merge([
+            'total_files'   => $results['files_scanned'] ?? 0,
+            'total_lines'   => $results['total_lines']   ?? 0,
+            'total_issues'  => 0,
+            'critical'      => 0,
+            'high'          => 0,
+            'medium'        => 0,
+            'low'           => 0,
+            'top_findings'  => [],
+            'hotspot_files' => [],
+        ], $results['summary'] ?? []);
 
         $scoreColor = is_int($overall)
             ? ($overall >= 80 ? '#22c55e' : ($overall >= 60 ? '#f59e0b' : '#ef4444'))

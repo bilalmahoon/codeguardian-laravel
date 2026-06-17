@@ -120,8 +120,13 @@ class RouteExtractor
         $normRoute  = $normaliseUri($routeUri);
         $normFilter = $normaliseUri($filter);
 
-        if (str_contains($normRoute, $normFilter) || str_contains($normFilter, $normRoute)) {
-            return true;
+        // Guard: str_contains(haystack, '') is ALWAYS true in PHP.
+        // Both strings must be non-empty before we do substring matching,
+        // otherwise every route (including '/') would match every filter.
+        if ($normFilter !== '' && $normRoute !== '') {
+            if (str_contains($normRoute, $normFilter) || str_contains($normFilter, $normRoute)) {
+                return true;
+            }
         }
 
         // Try matching trailing segments: filter "v1/auth/login" matches route "/api/v1/auth/login"

@@ -193,7 +193,9 @@ class AnalyzeCommand extends Command
             'scanned_at'     => now()->toISOString(),
             'engine'         => 'static',
             'summary'        => [
-                'total_issues'  => $raw['summary']['total_issues'],
+                'total_files'   => $raw['files_scanned']          ?? 0,
+                'total_lines'   => $raw['total_lines']             ?? 0,
+                'total_issues'  => $raw['summary']['total_issues'] ?? 0,
                 'critical'      => $bySeverity['critical'] ?? 0,
                 'high'          => $bySeverity['high']     ?? 0,
                 'medium'        => $bySeverity['medium']   ?? 0,

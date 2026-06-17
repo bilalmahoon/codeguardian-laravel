@@ -28,13 +28,14 @@ use Illuminate\Support\Facades\File;
 class RefactorCommand extends Command
 {
     protected $signature = 'codeguardian:refactor
-                            {--path=       : Project root directory (default: base_path())}
-                            {--module=     : Refactor a specific module only (e.g. User, Order)}
-                            {--api=        : Refactor APIs matching this filter (e.g. GET:/api/users)}
-                            {--type=       : Project type: laravel or flutter}
-                            {--mode=       : Execution mode: interactive (default) or auto}
-                            {--no-backup   : Skip creating backups before modifying files}
-                            {--skip-tests  : Skip test execution (not recommended)}';
+                            {--path=              : Project root directory (default: base_path())}
+                            {--module=            : Refactor a specific module only (e.g. User, Order)}
+                            {--api=               : Refactor APIs matching this filter (e.g. GET:/api/users)}
+                            {--type=              : Project type: laravel or flutter}
+                            {--mode=              : Execution mode: interactive (default) or auto}
+                            {--no-backup          : Skip creating backups before modifying files}
+                            {--skip-tests         : Skip test execution (not recommended)}
+                            {--skip-existing-tests: Skip running project existing tests (only run CodeGuardian stubs)}';
 
     protected $description = 'Analyze → write tests → refactor → verify tests → report (full interactive workflow)';
 
@@ -43,6 +44,7 @@ class RefactorCommand extends Command
     private bool   $interactiveMode;
     private bool   $backupEnabled;
     private bool   $testsEnabled;
+    private bool   $existingTestsEnabled;
 
     /** @var array<string,string> Rollback map: [ relativeFilePath => originalContent ] */
     private array $backups = [];
@@ -54,13 +56,14 @@ class RefactorCommand extends Command
         CodeScanner     $scanner,
         ReportFormatter $formatter,
     ): int {
-        $this->projectRoot     = $this->option('path') ?: base_path();
-        $this->projectType     = $this->option('type') ?: $this->detectType();
-        $this->interactiveMode = ($this->option('mode') ?? 'interactive') === 'interactive';
-        $this->backupEnabled   = ! $this->option('no-backup');
-        $this->testsEnabled    = ! $this->option('skip-tests');
-        $this->backups         = [];        // always start with empty backup map
-        $this->orchestrator    = new StaticOrchestrator();
+        $this->projectRoot          = $this->option('path') ?: base_path();
+        $this->projectType          = $this->option('type') ?: $this->detectType();
+        $this->interactiveMode      = ($this->option('mode') ?? 'interactive') === 'interactive';
+        $this->backupEnabled        = ! $this->option('no-backup');
+        $this->testsEnabled         = ! $this->option('skip-tests');
+        $this->existingTestsEnabled = ! $this->option('skip-existing-tests');
+        $this->backups              = [];
+        $this->orchestrator         = new StaticOrchestrator();
 
         if (! is_dir($this->projectRoot)) {
             $this->error("Path does not exist: {$this->projectRoot}");
@@ -109,9 +112,27 @@ class RefactorCommand extends Command
         // ── Step 5: Run baseline tests ───────────────────────────────────────
         $baselineResult = null;
         if ($this->testsEnabled) {
-            $this->section('STEP 3/5 — RUNNING BASELINE TESTS');
-            $baselineResult = $this->runTests();
+            $this->section('STEP 3/5 — BASELINE TESTS (before any change)');
+
+            if ($this->existingTestsEnabled) {
+                $this->line('  Running CodeGuardian stubs + project existing tests...');
+                $this->line('  (Use --skip-existing-tests to skip project tests for speed)');
+            } else {
+                $this->line('  Running CodeGuardian test stubs...');
+            }
+
+            $baselineResult = $this->runTests(cgOnly: false);
             $this->printTestResult('Baseline', $baselineResult);
+
+            if (! ($baselineResult['passed'] ?? true) && ! ($baselineResult['skipped'] ?? false)) {
+                $this->warn('  ⚠  Existing tests are already failing before refactoring.');
+                $this->warn('  Fix these first, or use --skip-existing-tests to skip the pre-existing failures.');
+                if ($this->interactiveMode) {
+                    if (! $this->confirm('  Continue anyway?', false)) {
+                        return self::FAILURE;
+                    }
+                }
+            }
         }
 
         // ── Step 6: Refactor files one-by-one ───────────────────────────────
@@ -120,9 +141,10 @@ class RefactorCommand extends Command
 
         // ── Step 7: Verify tests pass after refactoring ──────────────────────
         $finalTestResult = null;
-        if ($this->testsEnabled && ! empty($generatedTestFiles)) {
-            $this->section('STEP 5/5 — VERIFYING TESTS AFTER REFACTORING');
-            $finalTestResult = $this->runTests();
+        if ($this->testsEnabled) {
+            $this->section('STEP 5/5 — FINAL TEST VERIFICATION');
+            $this->line('  Running full test suite (CodeGuardian stubs + project existing tests)...');
+            $finalTestResult = $this->runTests(cgOnly: false);
             $this->printTestResult('Post-Refactor', $finalTestResult);
 
             if (! ($finalTestResult['passed'] ?? true)) {
@@ -288,20 +310,15 @@ class RefactorCommand extends Command
     }
 
     /**
-     * Run tests in the CodeGuardian tests directory.
-     * The $testFiles parameter was removed — the runner always targets the full
-     * tests/CodeGuardian/ directory so newly generated and pre-existing stubs
-     * are all exercised in one pass.
+     * Run CodeGuardian-generated stubs AND (optionally) the project's existing
+     * tests to detect breaking changes caused by refactoring.
+     *
+     * @param  bool  $cgOnly  When true, only run tests/CodeGuardian/ (fast per-file check).
+     *                        When false, also run the project's existing tests/Feature|Unit.
      */
-    private function runTests(): array
+    private function runTests(bool $cgOnly = false): array
     {
         if (! $this->testsEnabled) {
-            return ['passed' => true, 'total' => 0, 'skipped' => true];
-        }
-
-        $testsDir = base_path(config('codeguardian.output.tests_dir', 'tests/CodeGuardian'));
-
-        if (! is_dir($testsDir)) {
             return ['passed' => true, 'total' => 0, 'skipped' => true];
         }
 
@@ -312,7 +329,13 @@ class RefactorCommand extends Command
             return ['passed' => true, 'total' => 0, 'skipped' => true];
         }
 
-        return $runner->run($testsDir, $this->projectType);
+        if ($cgOnly || ! $this->existingTestsEnabled) {
+            // Quick check: only generated stubs
+            return $runner->runCodeGuardianTests($this->projectType);
+        }
+
+        // Full check: generated stubs + project's existing tests
+        return $runner->runAll($this->projectType);
     }
 
     private function runRefactoring(array $analysisResults, array $context): array
@@ -336,7 +359,8 @@ class RefactorCommand extends Command
             $this->line("  💾 Backups stored at: {$backupRoot}");
         }
 
-        // Hoist TestRunner — one instance for all per-file test runs
+        // Hoist TestRunner — one instance for all per-file test runs.
+        // Run after every file in interactive mode; skip in auto mode for speed.
         $runner = ($this->testsEnabled && $this->interactiveMode)
             ? new TestRunner($this->projectRoot)
             : null;
@@ -456,27 +480,47 @@ class RefactorCommand extends Command
 
             // ── Per-file test verification ────────────────────────────────────
             if ($runner !== null) {
-                $testsDir = base_path(config('codeguardian.output.tests_dir', 'tests/CodeGuardian'));
-                if (is_dir($testsDir)) {
-                    $this->line('  Running tests to verify...');
-                    $testResult = $runner->run($testsDir, $this->projectType);
-                    $this->printTestResult('After ' . basename($filePath), $testResult);
+                $this->line('  Running tests to verify...');
+                $this->line('    → CodeGuardian stubs (tests/CodeGuardian/)');
 
-                    if (! ($testResult['passed'] ?? true)) {
+                // Run CodeGuardian stubs first (fast)
+                $cgResult = $runner->runCodeGuardianTests($this->projectType);
+                $this->printTestResult('  Stubs', $cgResult);
+
+                // Run existing project tests too (breaking-change detector)
+                $existingResult = null;
+                if ($this->existingTestsEnabled) {
+                    $this->line('    → Project existing tests (tests/Feature/, tests/Unit/, ...)');
+                    $existingResult = $runner->runExistingProjectTests($this->projectType);
+                    $this->printTestResult('  Existing', $existingResult);
+                }
+
+                // Combine and decide
+                $testResult = $existingResult !== null
+                    ? $runner->mergeResults($cgResult, $existingResult)
+                    : $cgResult;
+
+                if (! ($testResult['passed'] ?? true) && ! ($testResult['skipped'] ?? false)) {
+                    // Tell the user WHICH suite failed to make it actionable
+                    if ($existingResult !== null && ! ($existingResult['passed'] ?? true)) {
+                        $this->error("  ⚠️  BREAKING CHANGE: existing project tests failed after refactoring {$filePath}!");
+                        $this->error("  This means the refactoring changed behaviour that existing tests rely on.");
+                    } else {
                         $this->error("  ⚠️  Tests FAILED after refactoring {$filePath}!");
-                        $choice = $this->choice(
-                            'What do you want to do?',
-                            ['Rollback this file', 'Continue anyway', 'Stop refactoring'],
-                            0
-                        );
+                    }
 
-                        if ($choice === 'Rollback this file') {
-                            $this->rollbackFile($filePath, $fullPath);
-                            $refactorResults[$filePath]['status'] = 'rolled_back';
-                        } elseif ($choice === 'Stop refactoring') {
-                            $this->stopRefactoring();
-                            return $refactorResults;
-                        }
+                    $choice = $this->choice(
+                        'What do you want to do?',
+                        ['Rollback this file', 'Continue anyway', 'Stop refactoring'],
+                        0
+                    );
+
+                    if ($choice === 'Rollback this file') {
+                        $this->rollbackFile($filePath, $fullPath);
+                        $refactorResults[$filePath]['status'] = 'rolled_back';
+                    } elseif ($choice === 'Stop refactoring') {
+                        $this->stopRefactoring();
+                        return $refactorResults;
                     }
                 }
             }
@@ -646,17 +690,33 @@ class RefactorCommand extends Command
     private function printTestResult(string $label, array $result): void
     {
         if ($result['skipped'] ?? false) {
-            $this->line("  [{$label}] Tests skipped.");
+            $reason = $result['reason'] ?? 'no tests found';
+            $this->line("  [{$label}] Skipped ({$reason})");
             return;
         }
 
-        $icon    = $result['passed'] ? '✅' : '❌';
-        $total   = $result['total'] ?? 0;
-        $passed  = $result['passed_count'] ?? 0;
-        $failed  = $result['failed_count'] ?? 0;
-        $ms      = $result['duration_ms'] ?? 0;
+        $icon   = ($result['passed'] ?? true) ? '✅' : '❌';
+        $total  = $result['total'] ?? 0;
+        $passed = $result['passed_count'] ?? 0;
+        $failed = $result['failed_count'] ?? 0;
+        $ms     = $result['duration_ms'] ?? 0;
 
         $this->line("  {$icon} {$label}: {$passed}/{$total} passed, {$failed} failed ({$ms}ms)");
+
+        // Show per-source breakdown when both suites were run
+        if (isset($result['sources'])) {
+            $cg  = $result['sources']['codeguardian'] ?? null;
+            $ex  = $result['sources']['existing']     ?? null;
+
+            if ($cg && ! ($cg['skipped'] ?? false)) {
+                $cgIcon = ($cg['passed'] ?? true) ? '✅' : '❌';
+                $this->line("       {$cgIcon} CodeGuardian stubs : {$cg['passed_count']}/{$cg['total']} ({$cg['duration_ms']}ms)");
+            }
+            if ($ex && ! ($ex['skipped'] ?? false)) {
+                $exIcon = ($ex['passed'] ?? true) ? '✅' : '❌';
+                $this->line("       {$exIcon} Existing project   : {$ex['passed_count']}/{$ex['total']} ({$ex['duration_ms']}ms)");
+            }
+        }
 
         foreach ($result['failures'] ?? [] as $failure) {
             $this->warn("     FAIL: {$failure['test']}");
