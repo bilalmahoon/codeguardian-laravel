@@ -1,8 +1,25 @@
 # CodeGuardian AI for Laravel
 
-**Analyze. Improve. Validate. Report.**
+> **Analyze. Improve. Validate. Report.**
 
-A drop-in Composer package that brings AI-powered code analysis, security scanning, performance auditing, and test generation to any existing Laravel or Flutter project — all via artisan commands, no SaaS account required.
+A static code analysis package for Laravel projects. Runs directly in your existing project via artisan commands.
+
+**No API key needed. No internet required. No cost. 100% embedded.**
+
+> AI mode is also available (optional) if you want richer explanations powered by OpenAI / Claude / Gemini.
+
+---
+
+## What It Detects
+
+| Analyzer | What It Finds |
+|---|---|
+| **Architecture** | Fat controllers (>150 lines), missing service layer, direct DB in controllers, inline validation, facade overuse |
+| **Security** | SQL injection, XSS `{!! !!}`, hardcoded secrets & API keys, mass assignment `$request->all()`, missing authorization, debug code left in production, insecure file uploads |
+| **Performance** | N+1 queries, `Model::all()` without pagination, `count()` on loaded collections, missing eager loading, exports without chunking |
+| **Tech Debt** | Large classes, high cyclomatic complexity, duplicated code blocks, TODO/FIXME debt, commented-out dead code, missing return types, magic numbers, deep nesting |
+| **Test Generator** | Generates PHPUnit test stubs from method signatures (controller, service, model, generic) |
+| **Refactoring** | Auto-fixes: `$request->all()` → `$request->validated()`, removes `dd()`/`dump()` debug calls. Reports manual fixes for the rest |
 
 ---
 
@@ -12,339 +29,339 @@ A drop-in Composer package that brings AI-powered code analysis, security scanni
 |---|---|
 | PHP | ^8.1 |
 | Laravel | ^9.0 / ^10.0 / ^11.0 |
-| AI API Key | OpenAI / Claude / Gemini |
+| API Key | **Not required** (static mode) |
 
 ---
 
 ## Installation
 
-```bash
-composer require codeguardian/laravel
+### On any machine (from GitHub)
+
+**Step 1 — Add repository to `composer.json`**
+
+```json
+{
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/bilalmahoon/codeguardian-laravel"
+        }
+    ]
+}
 ```
 
-Laravel's package auto-discovery will register the service provider automatically.
+**Step 2 — Install the package**
 
-Publish the config file:
+```bash
+composer require codeguardian/laravel:dev-main
+```
+
+**Step 3 — Publish config (optional)**
 
 ```bash
 php artisan vendor:publish --tag=codeguardian-config
+```
+
+This creates `config/codeguardian.php` where you can customize skip directories, output paths, etc.
+
+---
+
+### Local development (path repository)
+
+If you have the package source locally:
+
+```json
+{
+    "repositories": [
+        {
+            "type": "path",
+            "url": "/absolute/path/to/packages/codeguardian-laravel",
+            "options": { "symlink": true }
+        }
+    ]
+}
+```
+
+```bash
+composer require codeguardian/laravel:@dev
 ```
 
 ---
 
 ## Configuration
 
-Add your AI API key to `.env`:
+The only required `.env` setting is — nothing. By default it runs in **static mode**, no API key needed.
 
 ```env
-# Choose your provider: openai | claude | gemini
-CODEGUARDIAN_PROVIDER=openai
+# Engine mode (default: static — no API key needed)
+CODEGUARDIAN_MODE=static
 
-# OpenAI (default)
-CODEGUARDIAN_OPENAI_KEY=sk-...
-
-# Or Claude
-CODEGUARDIAN_CLAUDE_KEY=sk-ant-...
-
-# Or Gemini
-CODEGUARDIAN_GEMINI_KEY=...
+# Optional: use AI for richer analysis
+# CODEGUARDIAN_MODE=ai
+# CODEGUARDIAN_PROVIDER=openai
+# CODEGUARDIAN_OPENAI_KEY=sk-...
 ```
 
 ---
 
-## Module-Based Laravel Support
+## Usage
 
-CodeGuardian auto-detects your module structure. No extra config needed for:
-
-| Structure | Directory | Framework |
-|---|---|---|
-| `nwidart/laravel-modules` | `Modules/UserModule/` | `composer require nwidart/laravel-modules` |
-| Custom modules | `app/Modules/User/` | Any custom structure |
-| DDD / Domain | `app/Domain/User/` | Domain-Driven Design |
-
-For non-standard paths, add to `config/codeguardian.php`:
-```php
-'modules' => [
-    'paths' => ['app/Components', 'src/Features'],
-],
-```
-
----
-
-## Commands
-
-### 1. Full Analysis
-
-Run all agents: architecture, security, performance, tech debt, and test generation.
+### Full analysis (most common)
 
 ```bash
-# Analyze your current project (auto-detects Laravel or Flutter)
+# Analyze entire project
 php artisan codeguardian:analyze
 
-# Specify a path and type explicitly
-php artisan codeguardian:analyze --path=app/ --type=laravel
+# Analyze a specific directory
+php artisan codeguardian:analyze --path=app/Http/Controllers
 
-# Run specific agents only
+# Analyze a specific module (nwidart/laravel-modules)
+php artisan codeguardian:analyze --module=User
+
+# Analyze only APIs matching a route filter
+php artisan codeguardian:analyze --api=orders
+
+# Run specific analyzers only
 php artisan codeguardian:analyze --agents=security,performance
 
-# Output to a custom directory
-php artisan codeguardian:analyze --output=storage/reports
-
-# Only print to console, no files saved
+# Print to console only (no report files)
 php artisan codeguardian:analyze --no-report
+
+# Analyze then immediately start interactive refactoring
+php artisan codeguardian:analyze --refactor
 ```
-
-**What it checks:**
-- SOLID violations, fat controllers, missing service layers
-- SQL injection, XSS, CSRF, missing authorization, secret exposure
-- N+1 queries, missing indexes, cache opportunities
-- Dead code, duplicate logic, complex methods
-- Generates test cases for all discovered issues
-
-**Output:** saves `scan-{project}-{timestamp}.json` and `.html` to `storage/codeguardian/reports/`
 
 ---
 
-### 2. Interactive Refactoring (new)
-
-The most powerful command — full workflow: analyze → write tests → refactor → verify.
+### Security scan only
 
 ```bash
-# Full interactive refactoring of the whole project
-php artisan codeguardian:refactor
+php artisan codeguardian:security
 
-# Refactor a specific module only
-php artisan codeguardian:refactor --module=User
+# Scan specific path
+php artisan codeguardian:security --path=app/Http
+
+# Fail CI if any high+ issues found
+php artisan codeguardian:security --fail-on=high
+```
+
+---
+
+### Performance scan only
+
+```bash
+php artisan codeguardian:performance
+
+php artisan codeguardian:performance --path=app/Services
+```
+
+---
+
+### Generate test stubs
+
+```bash
+# Generate PHPUnit test stubs for all classes
+php artisan codeguardian:test
+
+# Preview without writing files
+php artisan codeguardian:test --dry-run
+
+# Generate test for one specific file
+php artisan codeguardian:test --file=UserController.php
+```
+
+Generated tests are saved to `tests/CodeGuardian/` by default. They are **stubs** — review and fill in proper test data before running.
+
+---
+
+### Interactive refactoring workflow
+
+```bash
+php artisan codeguardian:refactor
+```
+
+This runs the full workflow:
+
+```
+1. Analyze code     → find all issues
+2. Show report      → ask confirmation to proceed
+3. Generate tests   → write test stubs BEFORE changing any code
+4. Run tests        → establish baseline (passes/fails)
+5. Refactor         → fix one file at a time (ask per file in interactive mode)
+   - Auto-fixes:    $request->all() → $request->validated(), remove dd()/dump()
+   - Manual todos:  listed per file for issues requiring human judgment
+6. Run tests again  → verify nothing broke (per file or at end)
+   - If tests fail: rollback this file / continue / stop
+7. Final report     → before/after summary saved to storage/codeguardian/reports/
+```
+
+Options:
+
+```bash
+# Refactor a specific module
 php artisan codeguardian:refactor --module=Order
 
 # Refactor APIs matching a filter
-php artisan codeguardian:refactor --api=GET:/api/users
-php artisan codeguardian:refactor --api=UserController
-php artisan codeguardian:refactor --api=POST:/api
+php artisan codeguardian:refactor --api=invoices
 
-# Auto mode (no interactive prompts — useful in CI)
-php artisan codeguardian:refactor --mode=auto --module=Payment
+# Auto mode (no prompts — useful in CI)
+php artisan codeguardian:refactor --mode=auto
 
-# Skip file backups (not recommended)
+# Skip creating backups (not recommended)
 php artisan codeguardian:refactor --no-backup
 
 # Skip test execution
 php artisan codeguardian:refactor --skip-tests
 ```
 
-**What the workflow does, step by step:**
+---
+
+### Generate report from last analysis
+
+```bash
+php artisan codeguardian:report
+
+php artisan codeguardian:report --format=html
+php artisan codeguardian:report --format=json
+```
+
+Reports are saved to `storage/codeguardian/reports/`.
+
+---
+
+## Understanding the Results
+
+### Severity levels
+
+| Level | Meaning |
+|---|---|
+| 🔴 **Critical** | Must fix before production (SQL injection, hardcoded secrets, etc.) |
+| 🟠 **High** | Significant architectural or security problem |
+| 🟡 **Medium** | Code quality issue that should be addressed |
+| 🟢 **Low** | Minor improvement (style, naming, etc.) |
+
+### Score & Grade
+
+| Score | Grade | Meaning |
+|---|---|---|
+| 90–100 | A | Excellent |
+| 80–89 | B | Good |
+| 70–79 | C | Acceptable |
+| 60–69 | D | Needs work |
+| < 60 | F | Needs significant refactoring |
+
+---
+
+## Example Output
 
 ```
-STEP 1/5 — ANALYZING CODE
-  ✔  architect
-  ✔  security
-  ✔  performance
-  ✔  tech_debt
-  ✔  qa
+CodeGuardian AI — Analyze. Improve. Validate. Report.
 
-  Overall Score : 62/100
-  Total Issues  : 14  (2 critical, 5 high)
+📁 Scanning: /var/www/my-project/app/Http/Controllers
+🔧 Project type: laravel  |  Scope: Full project
+🔍 Engine: ⚡ Static engine (no API key needed)
 
-  ? Proceed with refactoring 14 issue(s)?  YES
+  Scanning files...
+  ✔  Found 17 files (1259 lines)
 
-STEP 2/5 — WRITING TESTS (before refactoring)
-  ✔  Test written: tests/CodeGuardian/UserControllerTest.php
-  ✔  Test written: tests/CodeGuardian/OrderServiceTest.php
-  3 test files written to tests/CodeGuardian/
+  Running architect analyzer...
+  Running security analyzer...
+  Running performance analyzer...
+  Running tech_debt analyzer...
 
-STEP 3/5 — RUNNING BASELINE TESTS
-  ✅ Baseline: 12/12 passed (834ms)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ANALYSIS SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Overall Score: 54/100  (Grade: F)
+  Architecture Score: 60/100
+  Security Score: 50/100
+  Performance Score: 70/100
+  Tech Debt Score: 65/100
 
-STEP 4/5 — REFACTORING
-  [1/4] app/Http/Controllers/UserController.php
-    [CRITICAL] Fat controller — 320 lines, no service layer
-    [HIGH]     Missing authorization policy
-    ? Refactor this file?  YES
-    Refactoring via AI...
-  ✔  File updated
-     → extract: Moved business logic to UserService
-     → add_authorization: Added $this->authorize('update', $user)
-  Running tests to verify...
-  ✅ After UserController.php: 12/12 passed
+  Total Issues: 23
+  🔴 Critical: 2
+  🟠 High:     7
+  🟡 Medium:   9
+  🟢 Low:      5
 
-  [2/4] app/Services/OrderService.php
-    [HIGH] N+1 query in getOrders()
-    ? Refactor this file?  YES
-    ...
+  TOP FINDINGS:
+  [CRITICAL] Hardcoded secret/credential detected
+             → PaymentController.php:45
+  [CRITICAL] Potential SQL Injection vulnerability
+             → ReportController.php:112
+  [HIGH] Fat Controller: OrderController (312 lines, 14 methods)
+         → OrderController.php
+  [HIGH] Missing authorization in InvoiceController
+         → InvoiceController.php
+  [HIGH] Potential N+1 query inside loop
+         → DashboardController.php:67
 
-STEP 5/5 — VERIFYING TESTS AFTER REFACTORING
-  ✅ Post-Refactor: 12/12 passed (891ms)
+  MOST ISSUES IN:
+  8 issues  → OrderController.php
+  5 issues  → ReportController.php
+  3 issues  → DashboardController.php
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-GENERATING FINAL REPORT
-  📄 Reports saved:
-     → storage/codeguardian/reports/scan-myapp-2025.json
-     → storage/codeguardian/reports/scan-myapp-2025.html
+📄 Reports saved:
+   → /var/www/my-project/storage/codeguardian/reports/scan-Controllers-2026-06-17_10-00-00.json
+   → /var/www/my-project/storage/codeguardian/reports/scan-Controllers-2026-06-17_10-00-00.html
 ```
 
 ---
 
-### 3. Security Scan
+## How It Works (no AI)
 
-OWASP Top 10 + mobile security review.
+The package uses a **rule-based static analysis engine** built on top of PHP token scanning and pattern matching:
 
-```bash
-php artisan codeguardian:security
-
-# Exit with error if critical issues found (useful in CI/CD)
-php artisan codeguardian:security --fail-on=critical
-
-# Fail on high+ issues
-php artisan codeguardian:security --fail-on=high
-
-# Save report
-php artisan codeguardian:security --output=storage/reports
-```
+| Component | What it does |
+|---|---|
+| `ArchitectureAnalyzer` | Counts lines/methods per class, detects DB calls in controllers, checks for FormRequest usage |
+| `SecurityAnalyzer` | Regex patterns for SQL injection, secret patterns (OpenAI/AWS/Google key formats), `$request->all()`, `{!! !!}` |
+| `PerformanceAnalyzer` | Detects relationship access inside foreach loops, `::all()` without pagination, `count()` on loaded collections |
+| `TechDebtAnalyzer` | Measures cyclomatic complexity, finds duplicate 5-line blocks across files, counts TODOs, measures nesting depth |
+| `StaticTestGenerator` | Parses class/method signatures, generates PHPUnit test stubs with correct namespaces and method names |
+| `StaticOrchestrator` | Runs all analyzers, merges results, calculates score, handles deterministic auto-fixes |
 
 ---
 
-### 3. Performance Scan
+## Optional: AI Mode
 
-```bash
-php artisan codeguardian:performance
+If you want more detailed natural language recommendations, add an API key:
 
-# Scan a specific directory
-php artisan codeguardian:performance --path=app/Http/Controllers
+```env
+CODEGUARDIAN_MODE=ai
+CODEGUARDIAN_PROVIDER=openai       # or: claude, gemini
+CODEGUARDIAN_OPENAI_KEY=sk-...
 ```
 
-**Finds:** N+1 queries, missing eager loading, missing DB indexes, cache opportunities, Flutter widget rebuild issues.
-
----
-
-### 4. Generate Tests
+Then run with `--mode=ai`:
 
 ```bash
-# Generate tests for your entire project
-php artisan codeguardian:test
-
-# Preview in console without saving files
-php artisan codeguardian:test --dry-run
-
-# Save to custom directory
-php artisan codeguardian:test --output=tests/AI/
-
-# Scan a specific path
-php artisan codeguardian:test --path=app/Http/Controllers
+php artisan codeguardian:analyze --mode=ai
 ```
 
-Generated tests are saved to `tests/CodeGuardian/` by default.
+Or set `CODEGUARDIAN_MODE=ai` in `.env` to make AI the default.
 
-Run them with:
-```bash
-php artisan test tests/CodeGuardian/
-# or
-vendor/bin/phpunit tests/CodeGuardian/
-```
-
----
-
-### 5. View / Regenerate Report
-
-```bash
-# Regenerate HTML from the latest scan JSON
-php artisan codeguardian:report --last
-
-# From a specific file
-php artisan codeguardian:report --file=storage/codeguardian/reports/scan-myapp-2025.json
-
-# Open in browser automatically
-php artisan codeguardian:report --last --open
-```
-
----
-
-## API-Specific Analysis
-
-You can target specific APIs without scanning the entire project:
-
-```bash
-# Analyze all routes containing "users"
-php artisan codeguardian:analyze --api=users
-
-# Analyze a specific HTTP method + path
-php artisan codeguardian:analyze --api=GET:/api/orders
-
-# Analyze all routes handled by a specific controller
-php artisan codeguardian:analyze --api=PaymentController
-
-# Refactor just those APIs
-php artisan codeguardian:refactor --api=GET:/api/users
-```
-
-The scanner will:
-1. Parse your `routes/api.php` (and all module route files)
-2. Find routes matching your filter
-3. Load only the relevant controller + service files
-4. Run the AI analysis on just those files
+> **Note**: Static mode finds the same structural issues as AI mode for most common patterns. AI mode adds natural language summaries and catches more subtle logic issues that require understanding program intent.
 
 ---
 
 ## CI/CD Integration
 
-Add to your GitHub Actions workflow:
-
 ```yaml
-- name: Security Scan
-  run: php artisan codeguardian:security --fail-on=critical
-  env:
-    CODEGUARDIAN_PROVIDER: openai
-    CODEGUARDIAN_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
+# .github/workflows/quality.yml
+- name: Run CodeGuardian
+  run: |
+    php artisan codeguardian:security --fail-on=high
+    php artisan codeguardian:analyze --no-report --agents=security,performance
 ```
 
----
-
-## Analysis Workflow
-
-This is the recommended workflow when reviewing a codebase:
-
-```
-1. php artisan codeguardian:analyze        ← Full scan, saves report
-2. Open the HTML report in storage/codeguardian/reports/
-3. php artisan codeguardian:test           ← Generate tests for found issues
-4. Fix the issues (refactor based on recommendations)
-5. php artisan codeguardian:analyze        ← Re-scan to confirm score improved
-6. php artisan codeguardian:report --last  ← Final report for the team
-```
-
----
-
-## What Each Agent Does
-
-| Agent | What It Analyzes |
-|---|---|
-| **Architect** | SOLID principles, service layer, repository pattern, DI, fat controllers/models |
-| **Security** | SQL injection, XSS, CSRF, missing auth, secret exposure, IDOR, OWASP Top 10 |
-| **Performance** | N+1 queries, missing indexes, cache opportunities, Flutter rebuild issues |
-| **Tech Debt** | Dead code, duplication, large classes, complex methods, poor naming |
-| **QA** | Generates unit, feature, API, widget, and integration tests |
-
----
-
-## Supported Projects
-
-| Project Type | Extensions Scanned |
-|---|---|
-| Laravel (any version) | `.php` |
-| Flutter / Dart | `.dart` |
-
----
-
-## Report Example
-
-The HTML report includes:
-- Overall quality score (0–100)
-- Per-agent scores (architecture, security, performance, tech debt)
-- All findings with severity badges (critical / high / medium / low)
-- Code snippets showing the problem
-- Recommended fixes with before/after examples
-- All generated test cases
+Exit codes:
+- `0` = Success (no issues at or above `--fail-on` level)
+- `1` = Issues found at the specified severity level
 
 ---
 
 ## License
 
-MIT License — see [LICENSE](LICENSE)
+MIT

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace CodeGuardian\Laravel\Commands;
 
-use CodeGuardian\Laravel\PackageOrchestrator;
+use CodeGuardian\Laravel\Analyzers\StaticOrchestrator;
 use CodeGuardian\Laravel\Support\CodeScanner;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
@@ -16,73 +16,80 @@ class GenerateTestsCommand extends Command
                             {--type=       : Project type: laravel or flutter}
                             {--output=     : Where to save generated tests (default: tests/CodeGuardian/)}
                             {--dry-run     : Show generated test code in console, do not write files}
-                            {--framework=  : Force test framework: phpunit, pest, flutter_test}';
+                            {--file=       : Generate test for a single file only}';
 
-    protected $description = 'Generate test cases for your project using AI (unit, feature, API, widget tests)';
+    protected $description = 'Generate PHPUnit test stubs from your code signatures — no API key needed';
 
-    public function handle(
-        CodeScanner         $scanner,
-        PackageOrchestrator $orchestrator
-    ): int {
+    public function handle(CodeScanner $scanner): int
+    {
         $path      = $this->option('path') ?: base_path();
         $type      = $this->option('type') ?: (file_exists($path . '/pubspec.yaml') ? 'flutter' : 'laravel');
         $outputDir = $this->option('output') ?: base_path(config('codeguardian.output.tests_dir', 'tests/CodeGuardian'));
         $dryRun    = $this->option('dry-run');
+        $singleFile = $this->option('file');
 
         if (! is_dir($path)) {
             $this->error("Path does not exist: {$path}");
             return self::FAILURE;
         }
 
-        $this->info('🧪 CodeGuardian AI — Test Generator');
+        $this->info('🧪 CodeGuardian — Test Generator  (static engine, no API key needed)');
         $this->info("   Scanning: {$path} [{$type}]");
         $this->newLine();
 
         $context = $scanner->buildContext($path, $type);
-        $this->line("   Files: {$context['summary']['total_files']}");
-        $this->line('   Generating tests via AI (this may take 30–60 seconds)...');
+        $files   = $context['files'] ?? [];
+
+        // Single-file mode
+        if ($singleFile) {
+            $files = array_filter(
+                $files,
+                fn($path) => str_contains($path, $singleFile) || basename($path) === $singleFile,
+                ARRAY_FILTER_USE_KEY
+            );
+        }
+
+        $this->line("   Files: " . count($files));
+        $this->line("   Analysing method signatures...");
         $this->newLine();
 
-        $results     = $orchestrator->generateTests($context, function (string $agent, bool $ok) {
-            $this->info($ok ? '   ✔  Test generation complete' : '   ✗  QA agent failed');
-        });
+        $orchestrator = new StaticOrchestrator();
+        $tests        = $orchestrator->generateTests($files);
 
-        $qaResult       = $results['agent_results']['qa'] ?? [];
-        $generatedTests = $qaResult['generated_tests'] ?? [];
-
-        if (empty($generatedTests)) {
-            $this->warn('   No tests were generated.');
+        if (empty($tests)) {
+            $this->warn('   No test stubs could be generated (no public methods found or only test files exist).');
             return self::FAILURE;
         }
 
-        $this->info("   Generated " . count($generatedTests) . " test(s):");
+        $this->info("   Generated " . count($tests) . " test stub(s):");
         $this->newLine();
 
         $saved = 0;
-        foreach ($generatedTests as $test) {
-            $className = $test['class_name'] ?? 'GeneratedTest' . ($saved + 1);
-            $framework = $test['framework'] ?? 'phpunit';
-            $testCode  = $test['test_code'] ?? '';
-            $scenario  = $test['scenario'] ?? '';
-            $coverage  = $test['coverage_area'] ?? '';
-
-            $this->line("  📝 {$className}");
-            $this->line("     Scenario : {$scenario}");
-            $this->line("     Coverage : {$coverage}");
-            $this->line("     Framework: {$framework}");
+        foreach ($tests as $test) {
+            $this->line("  📝 {$test->className}");
+            $this->line("     Source  : " . basename($test->sourceFile));
+            $this->line("     Methods : " . implode(', ', $test->methodsCovered));
+            $this->line("     Target  : {$test->filePath}");
 
             if ($dryRun) {
                 $this->newLine();
-                $this->line('  --- Test Code ---');
-                $this->line($testCode);
-                $this->line('  -----------------');
+                $this->line('  --- Generated Test ---');
+                $this->line($test->content);
+                $this->line('  ----------------------');
             } else {
-                $ext      = $framework === 'flutter_test' ? '.dart' : '.php';
-                $filePath = $outputDir . '/' . $className . $ext;
+                $fullPath = base_path($test->filePath);
+                File::ensureDirectoryExists(dirname($fullPath));
 
-                File::ensureDirectoryExists(dirname($filePath));
-                File::put($filePath, $testCode);
-                $this->info("     ✔  Saved: {$filePath}");
+                if (File::exists($fullPath)) {
+                    if (! $this->confirm("     ⚠  {$test->filePath} already exists. Overwrite?", false)) {
+                        $this->line("     Skipped.");
+                        $this->newLine();
+                        continue;
+                    }
+                }
+
+                File::put($fullPath, $test->content);
+                $this->info("     ✔  Saved: {$fullPath}");
                 $saved++;
             }
 
@@ -93,15 +100,10 @@ class GenerateTestsCommand extends Command
             $this->info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             $this->info("  ✅  {$saved} test file(s) saved to: {$outputDir}");
             $this->newLine();
-
-            if ($type === 'laravel') {
-                $this->info('  Run your tests:');
-                $this->line('    php artisan test tests/CodeGuardian/');
-                $this->line('    vendor/bin/phpunit tests/CodeGuardian/');
-            } else {
-                $this->info('  Run your tests:');
-                $this->line('    flutter test test/codeguardian/');
-            }
+            $this->info('  Next steps:');
+            $this->line('  1. Review generated tests and fill in proper test data');
+            $this->line('  2. Run: php artisan test tests/CodeGuardian/');
+            $this->line('     or:  ./vendor/bin/phpunit tests/CodeGuardian/');
         }
 
         return self::SUCCESS;

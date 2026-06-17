@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace CodeGuardian\Laravel\Commands;
 
-use CodeGuardian\Laravel\Agents\QaAgent;
-use CodeGuardian\Laravel\Agents\RefactorAgent;
-use CodeGuardian\Laravel\PackageOrchestrator;
+use CodeGuardian\Laravel\Analyzers\StaticOrchestrator;
 use CodeGuardian\Laravel\Support\CodeScanner;
 use CodeGuardian\Laravel\Support\ModuleDetector;
 use CodeGuardian\Laravel\Support\ReportFormatter;
@@ -50,9 +48,8 @@ class RefactorCommand extends Command
     private array $backups = [];
 
     public function handle(
-        CodeScanner         $scanner,
-        PackageOrchestrator $orchestrator,
-        ReportFormatter     $formatter,
+        CodeScanner     $scanner,
+        ReportFormatter $formatter,
     ): int {
         $this->projectRoot     = $this->option('path') ?: base_path();
         $this->projectType     = $this->option('type') ?: $this->detectType();
@@ -77,7 +74,7 @@ class RefactorCommand extends Command
 
         // ── Step 2: Analyze ──────────────────────────────────────────────────
         $this->section('STEP 1/5 — ANALYZING CODE');
-        $analysisResults = $this->runAnalysis($orchestrator, $context);
+        $analysisResults = $this->runAnalysis($context);
 
         if (empty($analysisResults['agent_results'])) {
             $this->error('Analysis produced no results. Aborting.');
@@ -206,16 +203,40 @@ class RefactorCommand extends Command
         };
     }
 
-    private function runAnalysis(PackageOrchestrator $orchestrator, array $context): array
+    private function runAnalysis(array $context): array
     {
         $this->line('');
-        return $orchestrator->run($context, 'all', function (string $agent, bool $ok, ?string $err) {
-            $icon = $ok ? '✔' : '✗';
-            $this->line("  {$icon}  {$agent}");
-            if (! $ok && $err) {
-                $this->warn("      Error: {$err}");
-            }
-        });
+        $files        = $context['files'] ?? [];
+        $orchestrator = new StaticOrchestrator();
+        $raw          = $orchestrator->analyze($files);
+
+        // Normalise to legacy format used by the rest of this command
+        $agentResults = [];
+        foreach ($raw['agents'] as $agent) {
+            $agentResults[$agent['agent']] = $agent;
+        }
+
+        $allIssues = $raw['all_findings'];
+        $summary   = $raw['summary'];
+
+        foreach ($raw['agents'] as $agent) {
+            $this->line("  ✔  {$agent['agent']} ({$agent['summary']['total_issues']} issues)");
+        }
+
+        return [
+            'overall_score' => $raw['overall_score'],
+            'grade'         => $raw['grade'],
+            'agent_results' => $agentResults,
+            'all_findings'  => $allIssues,
+            'summary'       => [
+                'total_issues' => $summary['total_issues'],
+                'critical'     => $summary['by_severity']['critical'],
+                'high'         => $summary['by_severity']['high'],
+                'medium'       => $summary['by_severity']['medium'],
+                'low'          => $summary['by_severity']['low'],
+            ],
+            'engine'        => 'static',
+        ];
     }
 
     private function generateAndWriteTests(array $analysisResults, array $context): array
@@ -223,25 +244,14 @@ class RefactorCommand extends Command
         $testsDir = base_path(config('codeguardian.output.tests_dir', 'tests/CodeGuardian'));
         File::ensureDirectoryExists($testsDir);
 
-        $generatedTests = $analysisResults['agent_results']['qa']['generated_tests'] ?? [];
-
-        if (empty($generatedTests)) {
-            // Run QA agent specifically if it wasn't in the analysis
-            $this->line('  Running QA agent to generate tests...');
-            $allIssues = $this->collectIssues($analysisResults['agent_results']);
-            $qaContext = array_merge($context, ['issues' => $allIssues]);
-            $qa        = new QaAgent();
-            $qaResult  = $qa->analyze($qaContext);
-            $generatedTests = $qaResult['generated_tests'] ?? [];
-        }
+        $this->line('  Generating test stubs from method signatures...');
+        $orchestrator   = new StaticOrchestrator();
+        $generatedTests = $orchestrator->generateTests($context['files'] ?? []);
 
         $writtenFiles = [];
         foreach ($generatedTests as $test) {
-            $className = $test['class_name'] ?? ('GeneratedTest' . count($writtenFiles));
-            $framework = $test['framework'] ?? 'phpunit';
-            $ext       = $framework === 'flutter_test' ? '.dart' : '.php';
-            $filePath  = $testsDir . '/' . $className . $ext;
-            $testCode  = $test['test_code'] ?? '';
+            $filePath  = $testsDir . '/' . $test->className . '.php';
+            $testCode  = $test->content;
 
             if (empty($testCode)) {
                 continue;
@@ -249,7 +259,7 @@ class RefactorCommand extends Command
 
             File::put($filePath, $testCode);
             $writtenFiles[] = $filePath;
-            $this->info("  ✔  Test written: tests/CodeGuardian/{$className}{$ext}");
+            $this->info("  ✔  Test written: {$filePath}");
         }
 
         if (empty($writtenFiles)) {
@@ -290,10 +300,10 @@ class RefactorCommand extends Command
             return [];
         }
 
-        $refactorAgent   = new RefactorAgent();
-        $refactorResults = [];
-        $fileCount       = 0;
-        $totalFiles      = count($findingsByFile);
+        $staticOrchestrator = new StaticOrchestrator();
+        $refactorResults    = [];
+        $fileCount          = 0;
+        $totalFiles         = count($findingsByFile);
 
         foreach ($findingsByFile as $filePath => $issues) {
             $fileCount++;
@@ -301,14 +311,12 @@ class RefactorCommand extends Command
             $this->info("  [{$fileCount}/{$totalFiles}] {$filePath}");
             $this->line("  Issues: " . count($issues));
 
-            // Show issues for this file
             foreach ($issues as $issue) {
                 $sev   = strtoupper($issue['severity'] ?? 'medium');
                 $title = $issue['title'] ?? 'Issue';
                 $this->line("    [{$sev}] {$title}");
             }
 
-            // Ask confirmation in interactive mode
             if ($this->interactiveMode) {
                 if (! $this->confirm("  Refactor this file?", true)) {
                     $this->line('  Skipped.');
@@ -316,7 +324,6 @@ class RefactorCommand extends Command
                 }
             }
 
-            // Read current file content
             $fullPath = $this->projectRoot . '/' . ltrim($filePath, '/');
             if (! file_exists($fullPath)) {
                 $this->warn("  File not found: {$fullPath} — skipping.");
@@ -325,42 +332,43 @@ class RefactorCommand extends Command
 
             $originalContent = file_get_contents($fullPath);
 
-            // Backup
             if ($this->backupEnabled) {
                 $this->backups[$filePath] = $originalContent;
             }
 
-            // Run RefactorAgent
-            $this->line('  Refactoring via AI...');
+            // Static deterministic refactoring (no AI needed)
+            $this->line('  Applying static refactoring rules...');
+            $result = $staticOrchestrator->refactorFile($filePath, $originalContent, $issues);
 
-            try {
-                $result = $refactorAgent->refactorFile($filePath, $originalContent, $issues);
-            } catch (\Throwable $e) {
-                $this->error("  AI refactoring failed: {$e->getMessage()}");
+            if (! $result->hasChanges()) {
+                $this->warn("  No auto-fixable patterns found in {$filePath}. See manual TODOs:");
+                foreach ($result->changes as $change) {
+                    $this->line("     → {$change}");
+                }
+                $refactorResults[$filePath] = [
+                    'status'      => 'manual_required',
+                    'issues'      => count($issues),
+                    'auto_fixed'  => 0,
+                    'manual_todos' => $result->manualTodos,
+                    'changes'     => $result->changes,
+                ];
                 continue;
             }
 
-            $refactoredContent = $result['refactored_file'] ?? null;
-
-            if (empty($refactoredContent)) {
-                $this->warn('  AI did not return refactored content. Skipping.');
-                continue;
-            }
-
-            // Write refactored file
-            File::put($fullPath, $refactoredContent);
+            File::put($fullPath, $result->refactored);
             $this->info("  ✔  File updated: {$filePath}");
 
-            // Show changes summary
-            $changes = $result['changes'] ?? [];
-            foreach ($changes as $change) {
-                $this->line("     → {$change['type']}: {$change['description']}");
+            foreach ($result->changes as $change) {
+                $icon = str_starts_with($change, '[MANUAL]') ? '⚠' : '✔';
+                $this->line("     {$icon} {$change}");
             }
 
             $refactorResults[$filePath] = [
-                'status'   => 'refactored',
-                'issues'   => count($issues),
-                'changes'  => $changes,
+                'status'       => 'refactored',
+                'issues'       => count($issues),
+                'auto_fixed'   => $result->autoFixed,
+                'manual_todos' => $result->manualTodos,
+                'changes'      => $result->changes,
             ];
 
             // Run tests after each file refactoring (one-by-one mode)

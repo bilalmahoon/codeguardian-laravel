@@ -4,7 +4,24 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | AI Provider
+    | Analysis Engine Mode
+    |--------------------------------------------------------------------------
+    | "static" — built-in rule-based engine (default).
+    |             No API key needed. Works offline. Free. Fast.
+    |             Detects: N+1, SQL injection, fat controllers, mass assignment,
+    |             hardcoded secrets, missing auth, cyclomatic complexity, etc.
+    |
+    | "ai"     — Uses an external AI provider (OpenAI / Claude / Gemini).
+    |             Requires API key. Richer natural language explanations.
+    |
+    | "hybrid" — Runs static engine first, then AI enriches findings.
+    */
+
+    'mode' => env('CODEGUARDIAN_MODE', 'static'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | AI Provider (only used when mode = "ai" or "hybrid")
     |--------------------------------------------------------------------------
     | Which AI provider to use for analysis.
     | Supported: "openai", "claude", "gemini"
@@ -34,9 +51,14 @@ return [
 
     'gemini' => [
         'key'         => env('CODEGUARDIAN_GEMINI_KEY', env('GEMINI_API_KEY')),
-        'model'       => env('CODEGUARDIAN_GEMINI_MODEL', 'gemini-1.5-pro'),
+        'model'       => env('CODEGUARDIAN_GEMINI_MODEL', 'gemini-1.5-flash'),
         'max_tokens'  => env('CODEGUARDIAN_MAX_TOKENS', 8192),
         'temperature' => 0.1,
+        // Available models:
+        // gemini-1.5-flash         ← default, free tier, fast
+        // gemini-2.0-flash         ← newer free tier
+        // gemini-2.5-flash-preview ← latest preview
+        // gemini-1.5-pro           ← paid, higher quality
     ],
 
     /*

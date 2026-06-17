@@ -91,8 +91,10 @@ class AiClient
         $cfg = config('codeguardian.gemini');
         $this->assertKey($cfg['key'] ?? null, 'Gemini');
 
-        $model = $cfg['model'] ?? 'gemini-1.5-pro';
-        $url   = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$cfg['key']}";
+        $model = $cfg['model'] ?? 'gemini-1.5-flash';
+
+        // Always use v1beta — it supports all models including stable ones
+        $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$cfg['key']}";
 
         try {
             $response = $this->http->post($url, [
