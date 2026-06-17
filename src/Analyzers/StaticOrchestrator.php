@@ -219,8 +219,19 @@ class StaticOrchestrator
 
                 // ── Manual fixes — security ───────────────────────────────────
                 case 'sql_injection':
-                    $line = $finding['line_start'] ?? '?';
-                    $changes[] = "[MANUAL] SQL injection risk at line {$line} — use parameterized bindings: DB::select('...', [\$var])";
+                    $line    = $finding['line_start'] ?? 0;
+                    $snippet = $finding['code_snippet'] ?? '';
+                    // Insert inline comment at the exact vulnerable line
+                    [$refactored, $fixed] = $this->insertInlineFixComment(
+                        $refactored,
+                        $line,
+                        "SQL INJECTION: Replace string concatenation with parameterized bindings.\n" .
+                        "     BEFORE: {$snippet}\n" .
+                        "     AFTER:  DB::select('SELECT ... WHERE id = ?', [\$id])"
+                    );
+                    $changes[] = $fixed
+                        ? "Auto-commented: SQL injection risk at line {$line} — see inline comment for fix"
+                        : "[MANUAL] SQL injection at line {$line} — use parameterized bindings: DB::select('...', [\$var])";
                     $appliedCategories[] = $cat;
                     break;
 
@@ -244,15 +255,31 @@ class StaticOrchestrator
                     $appliedCategories[] = $cat;
                     break;
 
-                // ── Manual fixes — performance ────────────────────────────────
+                // ── Performance — some auto-fixable ──────────────────────────
                 case 'n_plus_one':
                 case 'eager_loading':
-                    $changes[] = '[MANUAL] N+1 query — add eager loading: ->with([\'relationship\'])';
+                    // Insert inline comment at the exact loop line
+                    [$refactored, $fixed] = $this->insertInlineFixComment(
+                        $refactored,
+                        $finding['line_start'] ?? 0,
+                        'N+1 QUERY: Add eager loading to the query above — e.g. ->with([\'relationName\'])'
+                    );
+                    if ($fixed) {
+                        $changes[] = "Auto-commented: N+1 query at line {$finding['line_start']} — add ->with(['relation']) to the collection query above";
+                    } else {
+                        $changes[] = "[MANUAL] N+1 query at line {$finding['line_start']} — add eager loading: ->with(['relationship'])";
+                    }
                     $appliedCategories[] = $cat;
                     break;
 
                 case 'select_all':
-                    $changes[] = '[MANUAL] Model::all() without pagination — replace with ->paginate(25)';
+                    // Safe to auto-replace in most contexts — paginate() is iterable like a Collection
+                    [$refactored, $fixed] = $this->fixSelectAll($refactored);
+                    if ($fixed) {
+                        $changes[] = 'Auto-fixed: Model::all() replaced with Model::paginate(25) — adjust page size as needed';
+                    } else {
+                        $changes[] = '[MANUAL] Model::all() without pagination — replace with ->paginate(25)';
+                    }
                     $appliedCategories[] = $cat;
                     break;
 
@@ -262,17 +289,35 @@ class StaticOrchestrator
                     break;
 
                 case 'inefficient_count':
-                    $changes[] = '[MANUAL] count() on collection — replace with Model::where(...)->count() query';
+                    $line = $finding['line_start'] ?? 0;
+                    [$refactored, $fixed] = $this->insertInlineFixComment(
+                        $refactored,
+                        $line,
+                        "PERFORMANCE: count() loads all records into memory.\n" .
+                        "     Replace: count(\$collection)  →  Model::where(...)->count()"
+                    );
+                    $changes[] = $fixed
+                        ? "Auto-commented: inefficient count() at line {$line} — see inline comment"
+                        : '[MANUAL] count() on collection — replace with Model::where(...)->count() query';
                     $appliedCategories[] = $cat;
                     break;
 
                 case 'memory_usage':
-                    $changes[] = '[MANUAL] Bulk operation without chunking — use Model::chunk(500, fn(...) => ...)';
+                    $line = $finding['line_start'] ?? 0;
+                    [$refactored, $fixed] = $this->insertInlineFixComment(
+                        $refactored,
+                        $line,
+                        "MEMORY: ::all() in bulk operation loads every record at once.\n" .
+                        "     Replace with: Model::chunk(500, function(\$items) { ... })"
+                    );
+                    $changes[] = $fixed
+                        ? "Auto-commented: memory issue at line {$line} — see inline comment for chunk() fix"
+                        : '[MANUAL] Bulk operation without chunking — use Model::chunk(500, fn(...) => ...)';
                     $appliedCategories[] = $cat;
                     break;
 
                 case 'missing_index':
-                    $changes[] = '[MANUAL] Potential missing DB index — add $table->index(\'field\') in migration';
+                    $changes[] = '[MANUAL] Potential missing DB index — add $table->index(\'field\') in your migration';
                     $appliedCategories[] = $cat;
                     break;
 
@@ -351,6 +396,69 @@ class StaticOrchestrator
     {
         $result = preg_replace($pattern, $replacement, $content);
         return ($result === null) ? null : $result;
+    }
+
+    /**
+     * Replace Model::all() with Model::paginate(25) in controller/service context.
+     * paginate() returns a LengthAwarePaginator which is iterable (safe for foreach)
+     * and works with ->items() for array access.
+     */
+    private function fixSelectAll(string $content): array
+    {
+        // Match: SomeModel::all() — but NOT inside comments or strings starting with //
+        $pattern = '/\b([A-Z][a-zA-Z]+)::all\s*\(\s*\)/';
+
+        $changed = false;
+        $lines   = explode("\n", $content);
+
+        foreach ($lines as $i => $line) {
+            $trimmed = ltrim($line);
+            // Skip comment lines
+            if (str_starts_with($trimmed, '//') || str_starts_with($trimmed, '*') || str_starts_with($trimmed, '#')) {
+                continue;
+            }
+            $new = $this->safeReplace($pattern, '$1::paginate(25)', $line);
+            if ($new !== null && $new !== $line) {
+                $lines[$i] = $new;
+                $changed   = true;
+            }
+        }
+
+        return [implode("\n", $lines), $changed];
+    }
+
+    /**
+     * Insert a // CODEGUARDIAN-FIX: comment directly above a specific line number.
+     * This makes problems visible in the developer's editor without changing any logic.
+     *
+     * @return array{0: string, 1: bool}  [modified content, was inserted]
+     */
+    private function insertInlineFixComment(string $content, int $lineNumber, string $message): array
+    {
+        if ($lineNumber <= 0) {
+            return [$content, false];
+        }
+
+        $lines = explode("\n", $content);
+        $idx   = $lineNumber - 1; // 0-based
+
+        if (! isset($lines[$idx])) {
+            return [$content, false];
+        }
+
+        // Determine indentation from the target line
+        preg_match('/^(\s*)/', $lines[$idx], $m);
+        $indent = $m[1] ?? '';
+
+        // Build the comment block
+        $commentLines = array_map(
+            fn($l) => $indent . '// CODEGUARDIAN-FIX: ' . $l,
+            explode("\n", $message)
+        );
+
+        array_splice($lines, $idx, 0, $commentLines);
+
+        return [implode("\n", $lines), true];
     }
 
     private function fixMassAssignment(string $content): array
