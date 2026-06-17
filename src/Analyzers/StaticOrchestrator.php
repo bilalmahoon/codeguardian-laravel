@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CodeGuardian\Laravel\Analyzers;
 
+use CodeGuardian\Laravel\Support\CachedPhpParser;
 use Illuminate\Support\Facades\File;
 
 /**
@@ -169,32 +170,39 @@ class StaticOrchestrator
     /**
      * Apply deterministic, rule-based refactoring to a single file.
      *
-     * Decomposed into three phases for clarity and testability:
-     *   1. applyAutoFixes()   — changes code (safe regex replacements)
-     *   2. applyInlineHints() — inserts // CODEGUARDIAN-FIX: comments at problem lines
-     *   3. applyManualNotes() — produces [MANUAL] guidance messages (no code change)
+     * Three phases:
+     *   1. applyAutoFixes()   — safe code transformations (regex replacements)
+     *   2. applyInlineHints() — // CODEGUARDIAN-FIX: comments at exact problem lines
+     *   3. applyManualNotes() — [MANUAL] guidance messages (no code change)
+     *
+     * SAFETY CONTRACT
+     * ───────────────
+     * After Phase 1, the result is validated with PHP's built-in syntax checker
+     * (php -l equivalent via PhpParser). If the result would produce invalid PHP,
+     * the auto-fix is ROLLED BACK and the fix is downgraded to a [MANUAL] note.
+     * This ensures we NEVER write syntactically broken PHP to disk.
      */
     public function refactorFile(string $filePath, string $content, array $findings): RefactorResult
     {
-        // Deduplicate findings by category so each category is processed once
+        // Deduplicate: keep first finding per category
         $findingsByCategory = [];
         foreach ($findings as $finding) {
             $cat = $finding['category'] ?? 'unknown';
-            $findingsByCategory[$cat] ??= $finding; // keep first occurrence
+            $findingsByCategory[$cat] ??= $finding;
         }
 
         $refactored = $content;
         $changes    = [];
 
-        // Phase 1 — auto-fix (modifies code)
-        [$refactored, $autoFixChanges] = $this->applyAutoFixes($refactored, $findingsByCategory);
+        // Phase 1 — auto-fix with syntax safety gate
+        [$refactored, $autoFixChanges] = $this->applyAutoFixesSafely($refactored, $content, $findingsByCategory);
         $changes = array_merge($changes, $autoFixChanges);
 
-        // Phase 2 — inline hints (adds comments without breaking logic)
+        // Phase 2 — inline hints (comments only, can never break syntax)
         [$refactored, $hintChanges] = $this->applyInlineHints($refactored, $findingsByCategory);
         $changes = array_merge($changes, $hintChanges);
 
-        // Phase 3 — manual notes (guidance messages only, no code change)
+        // Phase 3 — manual notes (no code change)
         $manualNotes = $this->applyManualNotes($findingsByCategory);
         $changes     = array_merge($changes, $manualNotes);
 
@@ -208,39 +216,69 @@ class StaticOrchestrator
         );
     }
 
+    /**
+     * Check whether a PHP string is syntactically valid.
+     * Uses CachedPhpParser — no subprocess, no shell exec.
+     */
+    public function isValidPhp(string $code): bool
+    {
+        return CachedPhpParser::parse($code) !== null;
+    }
+
     // ──────────────────────────────────────────────────────────────────────────
     // Phase 1 — Auto-fixes (deterministic code transformations)
     // ──────────────────────────────────────────────────────────────────────────
 
     /**
-     * @return array{0: string, 1: list<string>}  [modified content, change messages]
+     * Apply auto-fixes one at a time, with a PHP syntax check after each one.
+     * If a fix produces invalid PHP it is rolled back and downgraded to [MANUAL].
+     *
+     * @param  string $originalContent  The untouched original (for rollback)
+     * @return array{0: string, 1: list<string>}
      */
-    private function applyAutoFixes(string $content, array $findingsByCategory): array
-    {
+    private function applyAutoFixesSafely(
+        string $content,
+        string $originalContent,
+        array  $findingsByCategory
+    ): array {
         $changes = [];
 
-        // mass_assignment: $request->all() → $request->validated()
+        // ── Fix 1: mass_assignment ($request->all() → $request->validated()) ─
         if (isset($findingsByCategory['mass_assignment'])) {
-            [$content, $fixed] = $this->fixMassAssignment($content);
+            [$candidate, $fixed] = $this->fixMassAssignment($content);
             if ($fixed) {
-                $changes[] = 'Auto-fixed: replaced $request->all() with $request->validated()';
+                if ($this->isValidPhp($candidate)) {
+                    $content   = $candidate;
+                    $changes[] = 'Auto-fixed: replaced $request->all() with $request->validated()';
+                } else {
+                    $changes[] = '[MANUAL] mass_assignment: auto-fix would produce invalid PHP — replace $request->all() with $request->validated() manually';
+                }
             }
         }
 
-        // debug_code: remove dd(), dump(), var_dump(), print_r()
+        // ── Fix 2: debug_code (remove dd/dump/var_dump/print_r) ──────────────
         if (isset($findingsByCategory['debug_code'])) {
-            [$content, $fixed] = $this->removeDebugCode($content);
+            [$candidate, $fixed] = $this->removeDebugCode($content);
             if ($fixed) {
-                $changes[] = 'Auto-fixed: removed debug statements (dd, dump, var_dump)';
+                if ($this->isValidPhp($candidate)) {
+                    $content   = $candidate;
+                    $changes[] = 'Auto-fixed: removed debug statements (dd, dump, var_dump)';
+                } else {
+                    $changes[] = '[MANUAL] debug_code: auto-fix would produce invalid PHP — remove dd()/dump() calls manually';
+                }
             }
         }
 
-        // select_all: Model::all() → Model::paginate(25)
+        // ── Fix 3: select_all — NOT auto-replaced ─────────────────────────────
+        // Model::all() → paginate(25) is context-dependent:
+        //   • Safe   in a controller returning a paginated resource
+        //   • UNSAFE if the result is chained with ->first(), ->count(), ->isEmpty(),
+        //     ->sum(), ->pluck(), etc. (LengthAwarePaginator != Collection)
+        //   • UNSAFE if the variable is passed to something expecting a Collection
+        // We ALWAYS downgrade this to an inline hint so the developer reviews it.
         if (isset($findingsByCategory['select_all'])) {
-            [$content, $fixed] = $this->fixSelectAll($content);
-            if ($fixed) {
-                $changes[] = 'Auto-fixed: Model::all() replaced with Model::paginate(25) — adjust page size as needed';
-            }
+            $changes[] = '[MANUAL] select_all: replace Model::all() with Model::paginate(25) '
+                       . '— verify callers accept a Paginator (not a Collection) before applying';
         }
 
         return [$content, $changes];
@@ -399,32 +437,6 @@ class StaticOrchestrator
         return ($result === null) ? null : $result;
     }
 
-    /**
-     * Replace Model::all() with Model::paginate(25).
-     * paginate() returns a LengthAwarePaginator which is iterable (safe in foreach).
-     *
-     * @return array{0: string, 1: bool}
-     */
-    private function fixSelectAll(string $content): array
-    {
-        $pattern = '/\b([A-Z][a-zA-Z]+)::all\s*\(\s*\)/';
-        $changed = false;
-
-        $lines = explode("\n", $content);
-        foreach ($lines as $i => $line) {
-            $trimmed = ltrim($line);
-            if (str_starts_with($trimmed, '//') || str_starts_with($trimmed, '*') || str_starts_with($trimmed, '#')) {
-                continue;
-            }
-            $new = $this->safeReplace($pattern, '$1::paginate(25)', $line);
-            if ($new !== null && $new !== $line) {
-                $lines[$i] = $new;
-                $changed   = true;
-            }
-        }
-
-        return [implode("\n", $lines), $changed];
-    }
 
     /**
      * Insert a // CODEGUARDIAN-FIX: comment block directly above the target line.
@@ -458,13 +470,44 @@ class StaticOrchestrator
         return [implode("\n", $lines), true];
     }
 
-    /** @return array{0: string, 1: bool} */
+    /**
+     * Replace $request->all() with $request->validated() in the three safe contexts:
+     *   Model::create($request->all())          → Model::create($request->validated())
+     *   $model->update($request->all())         → $model->update($request->validated())
+     *   $model->fill($request->all())           → $model->fill($request->validated())
+     *
+     * Patterns are written to FULLY match the $request->all() call INCLUDING its closing
+     * parenthesis, then replace the entire expression so no dangling '(' is left behind.
+     *
+     * Edge cases handled:
+     *   - Whitespace between tokens (e.g. create( $request -> all() ))
+     *   - Extra arguments after $request->all() for ->update()
+     *     e.g. ->update($request->all(), ['timestamps' => false])
+     *     → ->update($request->validated(), ['timestamps' => false])
+     *
+     * @return array{0: string, 1: bool}
+     */
     private function fixMassAssignment(string $content): array
     {
+        // Pattern explanation:
+        //   ::create\s*\(         — matches ::create(
+        //   \s*\$request\s*->\s*  — $request ->
+        //   all\s*\(\s*\)         — all()
+        //   \s*\)                 — the closing ) of create()
+        //
+        // For ->update and ->fill we DON'T match the outer closing ')' because
+        // there may be additional arguments after $request->all().
+        // Instead we only replace $request->all() → $request->validated() on those lines.
+
         $patterns = [
-            '/::create\s*\(\s*\$request->all\s*\(\s*\)/'    => '::create($request->validated(',
-            '/->update\s*\(\s*\$request->all\s*\(\s*\)/'    => '->update($request->validated(',
-            '/->fill\s*\(\s*\$request->all\s*\(\s*\)\s*\)/' => '->fill($request->validated())',
+            // ::create($request->all()) — replace entire expression
+            '/::create\s*\(\s*\$request\s*->\s*all\s*\(\s*\)\s*\)/' => '::create($request->validated())',
+
+            // ->update($request->all()  — replace only $request->all() part, preserve rest of args
+            '/->update\s*\(\s*\$request\s*->\s*all\s*\(\s*\)/' => '->update($request->validated()',
+
+            // ->fill($request->all()) — replace entire expression
+            '/->fill\s*\(\s*\$request\s*->\s*all\s*\(\s*\)\s*\)/' => '->fill($request->validated())',
         ];
 
         $changed = false;

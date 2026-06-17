@@ -317,8 +317,7 @@ class RefactorCommand extends Command
 
     private function runRefactoring(array $analysisResults, array $context): array
     {
-        // Group findings by file
-        $findingsByFile = $this->groupFindingsByFile($analysisResults['agent_results']);
+        $findingsByFile  = $this->groupFindingsByFile($analysisResults['agent_results']);
 
         if (empty($findingsByFile)) {
             $this->warn('  No file-specific findings to refactor.');
@@ -330,6 +329,13 @@ class RefactorCommand extends Command
         $totalFiles      = count($findingsByFile);
         $projectRealPath = realpath($this->projectRoot) ?: $this->projectRoot;
 
+        // Ensure disk-backup directory exists (crash-safe rollback)
+        $backupRoot = storage_path('codeguardian/backups/' . date('Y-m-d_H-i-s'));
+        if ($this->backupEnabled) {
+            File::ensureDirectoryExists($backupRoot);
+            $this->line("  💾 Backups stored at: {$backupRoot}");
+        }
+
         // Hoist TestRunner — one instance for all per-file test runs
         $runner = ($this->testsEnabled && $this->interactiveMode)
             ? new TestRunner($this->projectRoot)
@@ -339,7 +345,6 @@ class RefactorCommand extends Command
             $fileCount++;
             $this->newLine();
             $this->info("  [{$fileCount}/{$totalFiles}] {$filePath}");
-            $this->line("  Issues: " . count($issues));
 
             foreach ($issues as $issue) {
                 $sev   = strtoupper($issue['severity'] ?? 'medium');
@@ -347,14 +352,7 @@ class RefactorCommand extends Command
                 $this->line("    [{$sev}] {$title}");
             }
 
-            if ($this->interactiveMode) {
-                if (! $this->confirm("  Refactor this file?", true)) {
-                    $this->line('  Skipped.');
-                    continue;
-                }
-            }
-
-            // Build and validate full path — guard against path traversal
+            // ── Resolve + validate file path ────────────────────────────────
             $candidatePath = $projectRealPath . DIRECTORY_SEPARATOR . ltrim($filePath, '/\\');
             $fullPath      = realpath($candidatePath) ?: $candidatePath;
 
@@ -368,46 +366,104 @@ class RefactorCommand extends Command
                 continue;
             }
 
-            $originalContent = File::get($fullPath);  // consistent with File::put below
+            $originalContent = File::get($fullPath);
 
+            // ── Disk backup BEFORE any change ───────────────────────────────
             if ($this->backupEnabled) {
-                $this->backups[$filePath] = $originalContent;
+                $backupFile = $backupRoot . '/' . str_replace(['/', '\\'], '__', $filePath);
+                File::put($backupFile, $originalContent);
+                $this->backups[$filePath] = $originalContent; // in-memory copy as well
             }
 
-            $this->line('  Applying static refactoring rules...');
+            // ── Compute refactoring result ───────────────────────────────────
+            $this->line('  Analyzing and preparing changes...');
             $result = $this->orchestrator->refactorFile($filePath, $originalContent, $issues);
 
-            // Always show the change list — even if only manual TODOs
-            foreach ($result->changes as $change) {
-                $icon = str_starts_with($change, '[MANUAL]') ? '⚠ ' : '✔ ';
-                $this->line("     {$icon}{$change}");
+            // ── Show what WILL change (preview diff) before writing ──────────
+            if ($result->hasChanges()) {
+                $this->newLine();
+                $this->info('  CHANGES PREVIEW:');
+                foreach ($result->changes as $change) {
+                    $icon = str_starts_with($change, '[MANUAL]') ? '  ⚠  ' : '  ✔  ';
+                    $this->line($icon . $change);
+                }
+
+                // Show unified diff (first 30 lines)
+                $diffLines = array_slice(explode("\n", $result->diff()), 0, 30);
+                if (! empty($diffLines)) {
+                    $this->newLine();
+                    $this->line('  DIFF (first 30 lines):');
+                    foreach ($diffLines as $diffLine) {
+                        if (str_starts_with($diffLine, '+')) {
+                            $this->info('  ' . $diffLine);
+                        } elseif (str_starts_with($diffLine, '-')) {
+                            $this->warn('  ' . $diffLine);
+                        }
+                    }
+                }
+            } else {
+                $this->line('  No auto-fixable code patterns found.');
+                foreach ($result->changes as $change) {
+                    $this->line('  ⚠  ' . $change);
+                }
+                $refactorResults[$filePath] = [
+                    'status' => 'manual_required', 'issues' => count($issues),
+                    'auto_fixed' => 0, 'manual_todos' => $result->manualTodos,
+                    'changes' => $result->changes,
+                ];
+                continue;
             }
 
-            if ($result->hasChanges()) {
-                File::put($fullPath, $result->refactored);
-                $this->info("  ✔  File saved ({$result->autoFixed} auto-fix(es), {$result->manualTodos} manual TODO(s))");
-            } else {
-                $this->line("  ↔  No auto-fixable patterns — {$result->manualTodos} manual item(s) listed above");
+            // ── Ask confirmation (interactive) or proceed (auto) ─────────────
+            if ($this->interactiveMode) {
+                if (! $this->confirm("  Apply these changes to {$filePath}?", true)) {
+                    $this->line('  Skipped.');
+                    $refactorResults[$filePath] = [
+                        'status' => 'skipped', 'issues' => count($issues),
+                        'auto_fixed' => 0, 'manual_todos' => $result->manualTodos,
+                        'changes' => $result->changes,
+                    ];
+                    continue;
+                }
             }
+
+            // ── Final syntax safety gate ─────────────────────────────────────
+            // Even though StaticOrchestrator validates each individual fix,
+            // the COMBINED result (Phase 1 + Phase 2 comments) is validated here
+            // as the absolute last line of defense before any disk write.
+            if (! $this->orchestrator->isValidPhp($result->refactored)) {
+                $this->error("  ⚠️  SAFETY GATE: refactored file has PHP syntax errors — write ABORTED.");
+                $this->error("  Original file is unchanged. Please review manually.");
+                $refactorResults[$filePath] = [
+                    'status' => 'syntax_error_aborted', 'issues' => count($issues),
+                    'auto_fixed' => 0, 'manual_todos' => $result->manualTodos,
+                    'changes' => $result->changes,
+                ];
+                continue;
+            }
+
+            // ── Write refactored content to disk ─────────────────────────────
+            File::put($fullPath, $result->refactored);
+            $this->info("  ✔  Saved ({$result->autoFixed} auto-fix(es), {$result->manualTodos} manual TODO(s))");
 
             $refactorResults[$filePath] = [
-                'status'       => $result->hasChanges() ? 'refactored' : 'manual_required',
+                'status'       => 'refactored',
                 'issues'       => count($issues),
                 'auto_fixed'   => $result->autoFixed,
                 'manual_todos' => $result->manualTodos,
                 'changes'      => $result->changes,
             ];
 
-            // Per-file test verification (interactive mode only)
-            if ($runner !== null && $result->hasChanges()) {
+            // ── Per-file test verification ────────────────────────────────────
+            if ($runner !== null) {
                 $testsDir = base_path(config('codeguardian.output.tests_dir', 'tests/CodeGuardian'));
                 if (is_dir($testsDir)) {
                     $this->line('  Running tests to verify...');
                     $testResult = $runner->run($testsDir, $this->projectType);
-                    $this->printTestResult("After " . basename($filePath), $testResult);
+                    $this->printTestResult('After ' . basename($filePath), $testResult);
 
                     if (! ($testResult['passed'] ?? true)) {
-                        $this->error("  ⚠️  Tests failed after refactoring {$filePath}!");
+                        $this->error("  ⚠️  Tests FAILED after refactoring {$filePath}!");
                         $choice = $this->choice(
                             'What do you want to do?',
                             ['Rollback this file', 'Continue anyway', 'Stop refactoring'],
