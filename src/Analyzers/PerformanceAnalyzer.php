@@ -271,7 +271,7 @@ class PerformanceAnalyzer extends BaseAnalyzer
         }
     }
 
-    private function calculateScore(array $findings): int
+    protected function calculateScore(array $findings): int
     {
         $score   = 100;
         $weights = ['critical' => 20, 'high' => 12, 'medium' => 6, 'low' => 2];
@@ -283,7 +283,7 @@ class PerformanceAnalyzer extends BaseAnalyzer
         return max(0, min(100, $score));
     }
 
-    private function buildSummary(array $findings): array
+    protected function buildSummary(array $findings): array
     {
         $counts = ['critical' => 0, 'high' => 0, 'medium' => 0, 'low' => 0];
         foreach ($findings as $f) {

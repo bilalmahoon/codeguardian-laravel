@@ -290,7 +290,7 @@ class SecurityAnalyzer extends BaseAnalyzer
         }
     }
 
-    private function calculateScore(array $findings): int
+    protected function calculateScore(array $findings): int
     {
         $score   = 100;
         $weights = ['critical' => 25, 'high' => 15, 'medium' => 5, 'low' => 2];
@@ -302,7 +302,7 @@ class SecurityAnalyzer extends BaseAnalyzer
         return max(0, min(100, $score));
     }
 
-    private function buildSummary(array $findings): array
+    protected function buildSummary(array $findings): array
     {
         $counts = ['critical' => 0, 'high' => 0, 'medium' => 0, 'low' => 0];
         foreach ($findings as $f) {

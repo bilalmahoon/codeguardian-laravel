@@ -118,8 +118,12 @@ class ModuleDetector
      */
     public function detectModuleRoot(): ?string
     {
-        $extraPaths = config('codeguardian.modules.paths', []);
-        $toCheck    = array_merge(self::DEFAULT_MODULE_ROOTS, $extraPaths);
+        try {
+            $extraPaths = config('codeguardian.modules.paths', []);
+        } catch (\Throwable $e) {
+            $extraPaths = [];
+        }
+        $toCheck = array_merge(self::DEFAULT_MODULE_ROOTS, $extraPaths);
 
         foreach ($toCheck as $relPath) {
             $fullPath = $this->projectRoot . '/' . $relPath;

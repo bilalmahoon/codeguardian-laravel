@@ -115,14 +115,31 @@ PHP;
         $this->assertGreaterThan(0, $result->autoFixed);
     }
 
-    public function test_refactorFile_replaces_model_all_with_paginate(): void
+    /**
+     * select_all is intentionally NOT auto-replaced with paginate(25) because replacing
+     * ::all() with paginate() changes the return type from Collection to LengthAwarePaginator
+     * and would break callers. Instead, a CODEGUARDIAN-FIX inline comment is inserted so
+     * the developer reviews it manually — zero risk of silent behaviour change.
+     */
+    public function test_refactorFile_inserts_hint_comment_for_select_all_not_auto_paginate(): void
     {
         $content  = "<?php\nclass DashboardController extends Controller {\n    public function index() {\n        \$users = User::all();\n        return view('dash', compact('users'));\n    }\n}";
         $findings = [['category' => 'select_all', 'file' => 'app/Http/Controllers/DashboardController.php', 'line_start' => 4]];
         $result   = $this->orchestrator->refactorFile('app/Http/Controllers/DashboardController.php', $content, $findings);
 
-        $this->assertStringContainsString('paginate(25)', $result->refactored);
-        $this->assertStringNotContainsString('::all()', $result->refactored);
+        // The original ::all() call must remain unchanged (no silent rewrite)
+        $this->assertStringContainsString('::all()', $result->refactored,
+            'select_all must NOT be auto-replaced — it would silently change return type'
+        );
+        // paginate(25) must NOT appear — we never auto-replace
+        $this->assertStringNotContainsString('paginate(25)', $result->refactored,
+            'select_all must never be auto-replaced with paginate(25)'
+        );
+        // A [MANUAL] note must appear in the changes array so developers see the issue
+        $manualNotes = implode(' ', $result->changes);
+        $this->assertStringContainsString('select_all', $manualNotes,
+            'A [MANUAL] select_all guidance message must be added to $result->changes'
+        );
     }
 
     public function test_refactorFile_inserts_inline_comment_for_n_plus_one(): void

@@ -5,13 +5,21 @@ declare(strict_types=1);
 namespace CodeGuardian\Laravel\Support;
 
 /**
- * Parses Laravel route files and extracts route definitions.
+ * Parses Laravel route files and extracts route definitions with full URI resolution.
  *
- * Returns structured route list:
- * [
- *   ['method' => 'GET', 'uri' => '/api/users', 'controller' => 'UserController@index', 'file' => '...'],
- *   ...
- * ]
+ * Handles:
+ *   Route::prefix('v1')->group(...)
+ *   Route::group(['prefix' => 'v1'], ...)
+ *   Route::middleware([...])->prefix('v1')->group(...)
+ *   Nested groups at any depth
+ *   Route::resource() / Route::apiResource()
+ *
+ * Root cause of the original "No routes matching" bug:
+ *   The previous parser read raw URIs from route definitions without resolving
+ *   parent prefix groups. A route declared as Route::post('login', ...) inside
+ *   Route::prefix('v1')->prefix('auth')->group() would be stored with URI 'login'
+ *   instead of 'v1/auth/login'.
+ *   The new parser tracks a prefix stack using brace-depth traversal.
  */
 class RouteExtractor
 {
@@ -24,18 +32,12 @@ class RouteExtractor
 
     // ─── Public API ──────────────────────────────────────────────────────────
 
-    /**
-     * Extract all routes from the project.
-     */
     public function extractAll(): array
     {
         $routeFiles = $this->findAllRouteFiles();
         return $this->parseRouteFiles($routeFiles);
     }
 
-    /**
-     * Extract routes from a specific module.
-     */
     public function extractForModule(string $moduleName): array
     {
         $moduleDetector = new ModuleDetector($this->projectRoot);
@@ -54,49 +56,46 @@ class RouteExtractor
     }
 
     /**
-     * Find routes matching a specific URI pattern or HTTP method.
+     * Filter routes by a URI pattern, HTTP method, or controller keyword.
      *
-     * @param  string $filter  e.g. "GET:/api/users", "/api/users", "POST", "users"
+     * Examples:
+     *   "POST:/api/v1/auth/login"   — exact method + URI
+     *   "v1/auth/login"             — URI substring (any method)
+     *   "auth/login"                — URI substring
+     *   "AuthController"            — controller name keyword
+     *
+     * Matching is intentionally loose to handle prefix variations:
+     *   The user may type "v1/auth/login" while the stored URI is "/v1/auth/login"
+     *   or "api/v1/auth/login". We normalise and strip leading slashes before comparing.
      */
     public function filter(array $routes, string $filter): array
     {
         if (str_contains($filter, ':')) {
-            [$method, $uri] = explode(':', $filter, 2);
-            $method = strtoupper($method);
+            [$method, $uriFilter] = explode(':', $filter, 2);
+            $method    = strtoupper(trim($method));
+            $uriFilter = trim($uriFilter);
             return array_values(array_filter($routes, fn($r) =>
                 strtoupper($r['method']) === $method &&
-                (str_contains($r['uri'], $uri) || fnmatch('*' . $uri . '*', $r['uri']))
+                $this->uriMatches($r['uri'], $uriFilter)
             ));
         }
 
-        // Filter by URI pattern or controller keyword
         return array_values(array_filter($routes, fn($r) =>
-            str_contains($r['uri'], $filter) ||
+            $this->uriMatches($r['uri'], $filter) ||
             str_contains(strtolower($r['controller'] ?? ''), strtolower($filter))
         ));
     }
 
-    /**
-     * Get the controller file path for a route.
-     * Returns null if the file cannot be found.
-     */
     public function resolveControllerFile(array $route): ?string
     {
         $controller = $route['controller'] ?? null;
         if (! $controller) {
             return null;
         }
-
-        // Strip method name: UserController@index → UserController
         $className = explode('@', $controller)[0];
-
-        // Search for the class file
         return $this->findClassFile($className);
     }
 
-    /**
-     * Group routes by controller.
-     */
     public function groupByController(array $routes): array
     {
         $grouped = [];
@@ -107,22 +106,58 @@ class RouteExtractor
         return $grouped;
     }
 
-    // ─── Parsers ─────────────────────────────────────────────────────────────
+    // ─── URI matching ─────────────────────────────────────────────────────────
+
+    /**
+     * Flexible URI matching:
+     *   - Normalise: strip leading slash and optional "api/" prefix for comparison
+     *   - Try exact contains first
+     *   - Try matching the last N segments of the filter against the URI
+     */
+    private function uriMatches(string $routeUri, string $filter): bool
+    {
+        $normaliseUri    = fn($u) => ltrim(preg_replace('#^/?api/#', '', ltrim($u, '/')), '/');
+        $normRoute  = $normaliseUri($routeUri);
+        $normFilter = $normaliseUri($filter);
+
+        if (str_contains($normRoute, $normFilter) || str_contains($normFilter, $normRoute)) {
+            return true;
+        }
+
+        // Try matching trailing segments: filter "v1/auth/login" matches route "/api/v1/auth/login"
+        $filterParts = array_filter(explode('/', $normFilter));
+        $routeParts  = array_filter(explode('/', $normRoute));
+
+        if (count($filterParts) > 0 && count($routeParts) >= count($filterParts)) {
+            $routeTail = array_slice(array_values($routeParts), -count($filterParts));
+            if ($routeTail === array_values($filterParts)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // ─── File discovery ───────────────────────────────────────────────────────
 
     private function findAllRouteFiles(): array
     {
         $files = [];
 
-        // Standard Laravel route files
-        $standard = [
-            $this->projectRoot . '/routes/api.php',
-            $this->projectRoot . '/routes/web.php',
-            $this->projectRoot . '/routes/channels.php',
-        ];
+        foreach (['routes/api.php', 'routes/web.php', 'routes/channels.php'] as $rel) {
+            $path = $this->projectRoot . '/' . $rel;
+            if (file_exists($path)) {
+                $files[] = $path;
+            }
+        }
 
-        foreach ($standard as $f) {
-            if (file_exists($f)) {
-                $files[] = $f;
+        // Extra files in routes/ directory (e.g. routes/v1.php, routes/admin.php)
+        $routesDir = $this->projectRoot . '/routes';
+        if (is_dir($routesDir)) {
+            foreach (new \DirectoryIterator($routesDir) as $item) {
+                if ($item->isFile() && $item->getExtension() === 'php') {
+                    $files[] = $item->getPathname();
+                }
             }
         }
 
@@ -139,99 +174,178 @@ class RouteExtractor
         return array_unique($files);
     }
 
+    // ─── Parsing ─────────────────────────────────────────────────────────────
+
     private function parseRouteFiles(array $files): array
     {
         $routes = [];
-
         foreach ($files as $file) {
             if (! file_exists($file)) {
                 continue;
             }
-
             $content    = file_get_contents($file);
             $relFile    = ltrim(str_replace($this->projectRoot, '', $file), '/');
-            $fileRoutes = $this->parseRouteContent($content, $relFile);
-            $routes     = array_merge($routes, $fileRoutes);
+            $routes     = array_merge($routes, $this->parseRouteContent($content, $relFile));
         }
-
         return $routes;
     }
 
+    /**
+     * Parse route definitions from a file, resolving nested prefix groups.
+     *
+     * Algorithm:
+     *   Walk through lines tracking brace depth.
+     *   When a prefix-group opener is found at depth D, push its prefix onto the stack.
+     *   When a closing brace reduces depth to D, pop the prefix.
+     *   Every route definition is annotated with the current prefix stack joined by '/'.
+     */
     private function parseRouteContent(string $content, string $sourceFile): array
     {
         $routes = [];
+        $lines  = explode("\n", $content);
 
-        // Match Route::METHOD('uri', [...]) patterns
-        $pattern = '/Route\s*::\s*(get|post|put|patch|delete|any|match)\s*\(\s*[\'"]([^\'"]+)[\'"]/i';
+        // prefixStack[depth] = prefix string at that brace depth
+        $prefixStack    = [];
+        $braceDepth     = 0;
+        // Track which depth level each prefix was pushed at
+        $depthOfPrefix  = [];
 
-        preg_match_all($pattern, $content, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+        foreach ($lines as $lineNum => $line) {
+            $trimmed = trim($line);
 
-        foreach ($matches as $match) {
-            $method      = strtoupper($match[1][0]);
-            $uri         = $match[2][0];
-            $offset      = $match[0][1];
-            $controller  = $this->extractController($content, $offset);
-            $name        = $this->extractRouteName($content, $offset);
-            $lineNumber  = substr_count(substr($content, 0, $offset), "\n") + 1;
+            // ── Detect prefix group openers ──────────────────────────────────
+            $prefixValue = $this->extractPrefixFromLine($trimmed);
 
-            $routes[] = [
-                'method'      => $method,
-                'uri'         => $uri,
-                'controller'  => $controller,
-                'name'        => $name,
-                'source_file' => $sourceFile,
-                'line'        => $lineNumber,
-            ];
-        }
+            // Count brace changes on this line
+            $opens  = substr_count($line, '{') - substr_count($line, "'{'") - substr_count($line, '"{"');
+            $closes = substr_count($line, '}') - substr_count($line, "'}'") - substr_count($line, '"}"');
+            $opens  = max(0, (int) $opens);
+            $closes = max(0, (int) $closes);
 
-        // Match Route::resource / apiResource
-        $resourcePattern = '/Route\s*::\s*(resource|apiResource)\s*\(\s*[\'"]([^\'"]+)[\'"],\s*([A-Za-z\\\\]+)::class/';
-        preg_match_all($resourcePattern, $content, $resMatches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+            // If a prefix is declared AND this line opens a group block
+            if ($prefixValue !== null && $opens > 0) {
+                $braceDepth += $opens;
+                // Push prefix — it was declared at new depth
+                $prefixStack[$braceDepth]   = $prefixValue;
+                $depthOfPrefix[$braceDepth] = true;
+                $braceDepth -= $opens; // will be re-applied below
+            }
 
-        foreach ($resMatches as $match) {
-            $type       = $match[1][0];
-            $uri        = $match[2][0];
-            $controller = str_replace('\\', '\\', $match[3][0]);
-            $offset     = $match[0][1];
-            $lineNumber = substr_count(substr($content, 0, $offset), "\n") + 1;
+            // Apply opens first, then register prefix at that depth
+            if ($prefixValue !== null && $opens > 0) {
+                $newDepth = $braceDepth + $opens;
+                $prefixStack[$newDepth] = $prefixValue;
+            }
 
-            $methods = $type === 'apiResource'
-                ? ['GET', 'POST', 'GET:{id}', 'PUT:{id}', 'PATCH:{id}', 'DELETE:{id}']
-                : ['GET', 'POST', 'GET:{id}', 'PUT:{id}', 'PATCH:{id}', 'DELETE:{id}', 'GET:create', 'GET:edit'];
+            $braceDepth += $opens;
 
-            foreach ($methods as $method) {
+            // On close, remove any prefix registered at depth being exited
+            for ($i = 0; $i < $closes; $i++) {
+                unset($prefixStack[$braceDepth]);
+                $braceDepth = max(0, $braceDepth - 1);
+            }
+
+            // ── Parse route definitions ───────────────────────────────────────
+            $currentPrefix = implode('/', array_filter(array_map(
+                fn($p) => trim($p, '/'),
+                $prefixStack
+            )));
+
+            // Route::get/post/put/patch/delete/any('uri', ...)
+            $routePattern = '/Route\s*::\s*(get|post|put|patch|delete|any|match)\s*\(\s*[\'"]([^\'"]+)[\'"]/i';
+            if (preg_match($routePattern, $trimmed, $m)) {
+                $method     = strtoupper($m[1]);
+                $rawUri     = ltrim($m[2], '/');
+                $fullUri    = $this->joinUri($currentPrefix, $rawUri);
+                $controller = $this->extractController($content, (int) strpos($content, $line));
+                $name       = $this->extractRouteName($content, (int) strpos($content, $line));
+
                 $routes[] = [
                     'method'      => $method,
-                    'uri'         => $uri,
-                    'controller'  => $controller . ' (resource)',
-                    'name'        => $uri . '.*',
+                    'uri'         => '/' . ltrim($fullUri, '/'),
+                    'controller'  => $controller,
+                    'name'        => $name,
                     'source_file' => $sourceFile,
-                    'line'        => $lineNumber,
+                    'line'        => $lineNum + 1,
                 ];
+            }
+
+            // Route::resource / apiResource
+            $resourcePattern = '/Route\s*::\s*(resource|apiResource)\s*\(\s*[\'"]([^\'"]+)[\'"],\s*([A-Za-z\\\\]+)::class/';
+            if (preg_match($resourcePattern, $trimmed, $m)) {
+                $rawUri     = ltrim($m[2], '/');
+                $fullUri    = $this->joinUri($currentPrefix, $rawUri);
+                $controller = str_replace('\\', '/', $m[3]);
+                $methods    = ['GET', 'POST', 'GET:{id}', 'PUT:{id}', 'PATCH:{id}', 'DELETE:{id}'];
+
+                foreach ($methods as $method) {
+                    $routes[] = [
+                        'method'      => $method,
+                        'uri'         => '/' . ltrim($fullUri, '/'),
+                        'controller'  => $controller . ' (resource)',
+                        'name'        => $fullUri . '.*',
+                        'source_file' => $sourceFile,
+                        'line'        => $lineNum + 1,
+                    ];
+                }
             }
         }
 
         return $routes;
     }
 
+    /**
+     * Extract a prefix value from a line if it declares one.
+     * Handles:
+     *   Route::prefix('v1')->group(...)
+     *   Route::group(['prefix' => 'v1'], ...)
+     *   ->prefix('v1')
+     */
+    private function extractPrefixFromLine(string $line): ?string
+    {
+        // Route::prefix('value') or ->prefix('value')
+        if (preg_match('/(?:Route\s*::\s*|->)prefix\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)/', $line, $m)) {
+            return $m[1];
+        }
+
+        // Route::group(['prefix' => 'value'], ...)
+        if (preg_match('/Route\s*::\s*group\s*\(\s*\[.*[\'"]prefix[\'"]\s*=>\s*[\'"]([^\'"]+)[\'"]/', $line, $m)) {
+            return $m[1];
+        }
+
+        return null;
+    }
+
+    private function joinUri(string $prefix, string $segment): string
+    {
+        $prefix  = trim($prefix, '/');
+        $segment = trim($segment, '/');
+
+        if ($prefix === '') {
+            return $segment;
+        }
+        if ($segment === '') {
+            return $prefix;
+        }
+        return $prefix . '/' . $segment;
+    }
+
+    // ─── Controller extraction helpers ───────────────────────────────────────
+
     private function extractController(string $content, int $offset): string
     {
-        // Look ahead ~300 chars from the route definition to find controller
         $chunk = substr($content, $offset, 400);
 
-        // [ControllerClass::class, 'method']
         if (preg_match('/\[\s*([A-Za-z\\\\]+)::class\s*,\s*[\'"](\w+)[\'"]\s*\]/', $chunk, $m)) {
             $class = class_basename(str_replace('\\', '/', $m[1]));
             return $class . '@' . $m[2];
         }
 
-        // 'ControllerClass@method'
         if (preg_match('/[\'"]([A-Za-z\\\\]+@\w+)[\'"]/', $chunk, $m)) {
             return $m[1];
         }
 
-        // Closure
-        if (str_contains(substr($chunk, 0, 50), 'function')) {
+        if (str_contains(substr($chunk, 0, 80), 'function')) {
             return 'Closure';
         }
 
@@ -249,8 +363,7 @@ class RouteExtractor
 
     private function findClassFile(string $className): ?string
     {
-        $shortName = class_basename(str_replace('\\', '/', $className));
-
+        $shortName  = class_basename(str_replace('\\', '/', $className));
         $searchDirs = [
             $this->projectRoot . '/app',
             $this->projectRoot . '/Modules',
@@ -261,14 +374,11 @@ class RouteExtractor
             if (! is_dir($dir)) {
                 continue;
             }
-
             $iterator = new \RecursiveIteratorIterator(
                 new \RecursiveDirectoryIterator($dir, \RecursiveDirectoryIterator::SKIP_DOTS)
             );
-
             foreach ($iterator as $file) {
-                if ($file->getExtension() === 'php' &&
-                    str_contains($file->getFilename(), $shortName)) {
+                if ($file->getExtension() === 'php' && str_contains($file->getFilename(), $shortName)) {
                     return ltrim(str_replace($this->projectRoot, '', $file->getPathname()), '/');
                 }
             }

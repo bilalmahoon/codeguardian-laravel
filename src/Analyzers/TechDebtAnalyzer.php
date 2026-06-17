@@ -352,7 +352,7 @@ class TechDebtAnalyzer extends BaseAnalyzer
      * Override to use tech-debt specific weight for 'low' (1 instead of 2).
      * Tech debt findings accumulate gradually so low issues penalise less.
      */
-    private function calculateScore(array $findings): int
+    protected function calculateScore(array $findings): int
     {
         $weights = array_merge(Severity::WEIGHTS, [Severity::LOW => 1]);
         $score   = 100;
