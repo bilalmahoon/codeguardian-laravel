@@ -152,43 +152,179 @@ class StaticOrchestrator
     }
 
     /**
-     * Generate refactored version of a single file based on findings.
-     * This is a deterministic, rule-based refactoring (no AI needed).
+     * Deterministic, rule-based refactoring of a single file.
+     * No AI API call required.
+     *
+     * Auto-fixes: mass assignment ($request->all()), debug statements (dd/dump).
+     * All other categories produce actionable [MANUAL] guidance, one entry per
+     * category (not one per finding instance).
      */
     public function refactorFile(string $filePath, string $content, array $findings): RefactorResult
     {
-        $refactored = $content;
-        $changes    = [];
+        $refactored        = $content;
+        $changes           = [];
+        $appliedCategories = []; // prevent duplicate messages for same category
 
         foreach ($findings as $finding) {
-            if ($finding['file'] !== $filePath) {
+            $cat = $finding['category'] ?? 'unknown';
+
+            // Guard: skip findings that don't belong to this file
+            if (($finding['file'] ?? '') !== $filePath && ($finding['file'] ?? '') !== '') {
                 continue;
             }
 
-            switch ($finding['category']) {
+            // Already handled this category in this pass
+            if (in_array($cat, $appliedCategories, true)) {
+                continue;
+            }
+
+            switch ($cat) {
+                // ── Auto-fixable ──────────────────────────────────────────────
                 case 'mass_assignment':
-                    [$refactored, $changed] = $this->fixMassAssignment($refactored);
-                    if ($changed) $changes[] = 'Fixed mass assignment: replaced $request->all() with $request->validated()';
+                    [$refactored, $fixed] = $this->fixMassAssignment($refactored);
+                    if ($fixed) {
+                        $changes[] = 'Auto-fixed: replaced $request->all() with $request->validated()';
+                        $appliedCategories[] = $cat;
+                    }
                     break;
 
                 case 'debug_code':
-                    [$refactored, $changed] = $this->removeDebugCode($refactored);
-                    if ($changed) $changes[] = 'Removed debug statements (dd, dump, var_dump)';
+                    [$refactored, $fixed] = $this->removeDebugCode($refactored);
+                    if ($fixed) {
+                        $changes[] = 'Auto-fixed: removed debug statements (dd, dump, var_dump)';
+                        $appliedCategories[] = $cat;
+                    }
+                    break;
+
+                // ── Manual fixes — architecture ───────────────────────────────
+                case 'fat_controller':
+                    $changes[] = '[MANUAL] Fat controller — extract business logic to a dedicated Service class';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                case 'service_layer':
+                    $changes[] = '[MANUAL] Missing service layer — create a Service class and inject it via constructor';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                case 'solid':
+                    $changes[] = '[MANUAL] SOLID violation — extract inline validation to a FormRequest class';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                case 'dependency_injection':
+                    $changes[] = '[MANUAL] Heavy static facade use — inject dependencies via constructor instead';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                // ── Manual fixes — security ───────────────────────────────────
+                case 'sql_injection':
+                    $line = $finding['line_start'] ?? '?';
+                    $changes[] = "[MANUAL] SQL injection risk at line {$line} — use parameterized bindings: DB::select('...', [\$var])";
+                    $appliedCategories[] = $cat;
+                    break;
+
+                case 'secret_exposure':
+                    $changes[] = '[MANUAL] Hardcoded secret — move to .env and access via env() or config()';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                case 'authorization':
+                    $changes[] = '[MANUAL] Missing authorization — add $this->authorize() or use a Policy class';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                case 'xss':
+                    $changes[] = '[MANUAL] Unescaped output {!! !!} — use {{ }} unless HTML is explicitly sanitized';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                case 'insecure_upload':
+                    $changes[] = "[MANUAL] File upload lacks MIME validation — add: 'file' => 'required|file|mimes:jpg,png,pdf|max:10240'";
+                    $appliedCategories[] = $cat;
+                    break;
+
+                // ── Manual fixes — performance ────────────────────────────────
+                case 'n_plus_one':
+                case 'eager_loading':
+                    $changes[] = '[MANUAL] N+1 query — add eager loading: ->with([\'relationship\'])';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                case 'select_all':
+                    $changes[] = '[MANUAL] Model::all() without pagination — replace with ->paginate(25)';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                case 'missing_cache':
+                    $changes[] = '[MANUAL] Complex query without caching — wrap in Cache::remember(\'key\', 3600, fn() => ...)';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                case 'inefficient_count':
+                    $changes[] = '[MANUAL] count() on collection — replace with Model::where(...)->count() query';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                case 'memory_usage':
+                    $changes[] = '[MANUAL] Bulk operation without chunking — use Model::chunk(500, fn(...) => ...)';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                case 'missing_index':
+                    $changes[] = '[MANUAL] Potential missing DB index — add $table->index(\'field\') in migration';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                // ── Manual fixes — tech debt ──────────────────────────────────
+                case 'large_class':
+                    $changes[] = '[MANUAL] Large class — split into focused classes by responsibility';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                case 'high_complexity':
+                    $changes[] = '[MANUAL] High cyclomatic complexity — break method into smaller focused methods';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                case 'deep_nesting':
+                    $changes[] = '[MANUAL] Deep nesting — use early returns (guard clauses) to flatten logic';
+                    $appliedCategories[] = $cat;
                     break;
 
                 case 'missing_types':
-                    // Cannot safely auto-fix return types without full type inference
-                    $changes[] = '[MANUAL] Add return type declarations to methods';
+                    $count     = count(array_filter($findings, fn($f) => ($f['category'] ?? '') === 'missing_types'));
+                    $changes[] = "[MANUAL] Missing return type declarations — add PHP 8.1 types to {$count} method(s)";
+                    $appliedCategories[] = $cat;
                     break;
 
                 case 'magic_numbers':
-                    // Too risky to auto-rename — mark for manual fix
-                    $changes[] = '[MANUAL] Extract magic numbers to named constants';
+                    $changes[] = '[MANUAL] Magic numbers — extract to named constants (const MAX_ATTEMPTS = 5)';
+                    $appliedCategories[] = $cat;
                     break;
 
                 case 'todo_debt':
-                    // Just report — don't auto-remove TODOs
-                    $changes[] = '[MANUAL] Resolve TODO/FIXME comments';
+                    $count     = count(array_filter($findings, fn($f) => ($f['category'] ?? '') === 'todo_debt'));
+                    $changes[] = "[MANUAL] {$count} TODO/FIXME comment(s) — create tickets and resolve before release";
+                    $appliedCategories[] = $cat;
+                    break;
+
+                case 'dead_code':
+                    $changes[] = '[MANUAL] Commented-out dead code — delete it (git history preserves it)';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                case 'duplication':
+                    $changes[] = '[MANUAL] Duplicated code block — extract to a shared Trait, Service, or Base class';
+                    $appliedCategories[] = $cat;
+                    break;
+
+                default:
+                    // Unknown category — still surface it so the user isn't left with silence
+                    $label     = ucwords(str_replace('_', ' ', $cat));
+                    $rec       = $finding['recommendation'] ?? "Review and fix {$label} manually.";
+                    $changes[] = "[MANUAL] {$label}: {$rec}";
+                    $appliedCategories[] = $cat;
                     break;
             }
         }
@@ -198,7 +334,7 @@ class StaticOrchestrator
             original:    $content,
             refactored:  $refactored,
             changes:     $changes,
-            autoFixed:   count(array_filter($changes, fn($c) => ! str_starts_with($c, '[MANUAL]'))),
+            autoFixed:   count(array_filter($changes, fn($c) => str_starts_with($c, 'Auto-fixed:'))),
             manualTodos: count(array_filter($changes, fn($c) => str_starts_with($c, '[MANUAL]'))),
         );
     }
@@ -207,18 +343,29 @@ class StaticOrchestrator
     // Deterministic auto-fix methods
     // ──────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Apply a regex replacement safely.
+     * Returns null if PCRE encounters an error (do NOT write null to disk).
+     */
+    private function safeReplace(string $pattern, string $replacement, string $content): ?string
+    {
+        $result = preg_replace($pattern, $replacement, $content);
+        return ($result === null) ? null : $result;
+    }
+
     private function fixMassAssignment(string $content): array
     {
+        // Match ->update/::create/->fill followed by $request->all() even with extra args
         $patterns = [
-            '/::create\s*\(\s*\$request->all\s*\(\s*\)\s*\)/'   => '::create($request->validated())',
-            '/->update\s*\(\s*\$request->all\s*\(\s*\)\s*\)/'   => '->update($request->validated())',
-            '/->fill\s*\(\s*\$request->all\s*\(\s*\)\s*\)/'     => '->fill($request->validated())',
+            '/::create\s*\(\s*\$request->all\s*\(\s*\)/'   => '::create($request->validated(',
+            '/->update\s*\(\s*\$request->all\s*\(\s*\)/'   => '->update($request->validated(',
+            '/->fill\s*\(\s*\$request->all\s*\(\s*\)\s*\)/' => '->fill($request->validated())',
         ];
 
         $changed = false;
         foreach ($patterns as $pattern => $replacement) {
-            $new = preg_replace($pattern, $replacement, $content);
-            if ($new !== $content) {
+            $new = $this->safeReplace($pattern, $replacement, $content);
+            if ($new !== null && $new !== $content) {
                 $content = $new;
                 $changed = true;
             }
@@ -229,24 +376,31 @@ class StaticOrchestrator
 
     private function removeDebugCode(string $content): array
     {
+        // Matches single-line debug calls: dd(...); dump(...); var_dump(...); print_r(...);
+        // Multi-line calls are NOT auto-removed (too risky) — they appear as [MANUAL] from SecurityAnalyzer
         $patterns = [
-            '/^\s*dd\s*\([^;]*\);\s*$/m',
-            '/^\s*dump\s*\([^;]*\);\s*$/m',
-            '/^\s*var_dump\s*\([^;]*\);\s*$/m',
-            '/^\s*print_r\s*\([^;]*\);\s*$/m',
+            '/^[ \t]*dd\s*\(.*\);\s*$/m',
+            '/^[ \t]*dump\s*\(.*\);\s*$/m',
+            '/^[ \t]*var_dump\s*\(.*\);\s*$/m',
+            '/^[ \t]*print_r\s*\(.*\);\s*$/m',
         ];
 
         $changed = false;
         foreach ($patterns as $pattern) {
-            $new = preg_replace($pattern, '', $content);
-            if ($new !== $content) {
+            $new = $this->safeReplace($pattern, '', $content);
+            if ($new !== null && $new !== $content) {
                 $content = $new;
                 $changed = true;
             }
         }
 
-        // Clean up multiple blank lines left by removals
-        $content = preg_replace("/\n{3,}/", "\n\n", $content);
+        if ($changed) {
+            // Clean up blank lines left by removals (safely)
+            $cleaned = $this->safeReplace("/\n{3,}/", "\n\n", $content);
+            if ($cleaned !== null) {
+                $content = $cleaned;
+            }
+        }
 
         return [$content, $changed];
     }

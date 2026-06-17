@@ -44,8 +44,11 @@ class RefactorCommand extends Command
     private bool   $backupEnabled;
     private bool   $testsEnabled;
 
-    /** @var array Rollback map: [ filePath => originalContent ] */
+    /** @var array<string,string> Rollback map: [ relativeFilePath => originalContent ] */
     private array $backups = [];
+
+    /** @var StaticOrchestrator  Single instance shared across all workflow steps */
+    private StaticOrchestrator $orchestrator;
 
     public function handle(
         CodeScanner     $scanner,
@@ -56,6 +59,8 @@ class RefactorCommand extends Command
         $this->interactiveMode = ($this->option('mode') ?? 'interactive') === 'interactive';
         $this->backupEnabled   = ! $this->option('no-backup');
         $this->testsEnabled    = ! $this->option('skip-tests');
+        $this->backups         = [];        // always start with empty backup map
+        $this->orchestrator    = new StaticOrchestrator();
 
         if (! is_dir($this->projectRoot)) {
             $this->error("Path does not exist: {$this->projectRoot}");
@@ -105,7 +110,7 @@ class RefactorCommand extends Command
         $baselineResult = null;
         if ($this->testsEnabled) {
             $this->section('STEP 3/5 — RUNNING BASELINE TESTS');
-            $baselineResult = $this->runTests($generatedTestFiles);
+            $baselineResult = $this->runTests();
             $this->printTestResult('Baseline', $baselineResult);
         }
 
@@ -117,11 +122,11 @@ class RefactorCommand extends Command
         $finalTestResult = null;
         if ($this->testsEnabled && ! empty($generatedTestFiles)) {
             $this->section('STEP 5/5 — VERIFYING TESTS AFTER REFACTORING');
-            $finalTestResult = $this->runTests($generatedTestFiles);
+            $finalTestResult = $this->runTests();
             $this->printTestResult('Post-Refactor', $finalTestResult);
 
-            if (! $finalTestResult['passed']) {
-                $this->handleTestFailure($generatedTestFiles);
+            if (! ($finalTestResult['passed'] ?? true)) {
+                $this->handleTestFailure();
             }
         }
 
@@ -206,9 +211,8 @@ class RefactorCommand extends Command
     private function runAnalysis(array $context): array
     {
         $this->line('');
-        $files        = $context['files'] ?? [];
-        $orchestrator = new StaticOrchestrator();
-        $raw          = $orchestrator->analyze($files);
+        $files = $context['files'] ?? [];
+        $raw   = $this->orchestrator->analyze($files, [], $this->projectRoot);
 
         // Normalise to legacy format used by the rest of this command
         $agentResults = [];
@@ -244,14 +248,26 @@ class RefactorCommand extends Command
         $testsDir = base_path(config('codeguardian.output.tests_dir', 'tests/CodeGuardian'));
         File::ensureDirectoryExists($testsDir);
 
-        $this->line('  Generating test stubs from method signatures...');
-        $orchestrator   = new StaticOrchestrator();
-        $generatedTests = $orchestrator->generateTests($context['files'] ?? []);
+        // Only generate tests for files that HAVE findings — not every scanned file
+        $filesToTest   = array_keys($this->groupFindingsByFile($analysisResults['agent_results']));
+        $relevantFiles = array_filter(
+            $context['files'] ?? [],
+            fn($path) => in_array($path, $filesToTest, true),
+            ARRAY_FILTER_USE_KEY
+        );
+
+        if (empty($relevantFiles)) {
+            $this->warn('  No files with findings to generate tests for.');
+            return [];
+        }
+
+        $this->line('  Generating test stubs for ' . count($relevantFiles) . ' file(s) with issues...');
+        $generatedTests = $this->orchestrator->generateTests($relevantFiles);
 
         $writtenFiles = [];
         foreach ($generatedTests as $test) {
-            $filePath  = $testsDir . '/' . $test->className . '.php';
-            $testCode  = $test->content;
+            $filePath = $testsDir . '/' . $test->className . '.php';
+            $testCode = $test->content;
 
             if (empty($testCode)) {
                 continue;
@@ -271,23 +287,32 @@ class RefactorCommand extends Command
         return $writtenFiles;
     }
 
-    private function runTests(array $testFiles): array
+    /**
+     * Run tests in the CodeGuardian tests directory.
+     * The $testFiles parameter was removed — the runner always targets the full
+     * tests/CodeGuardian/ directory so newly generated and pre-existing stubs
+     * are all exercised in one pass.
+     */
+    private function runTests(): array
     {
-        if (! $this->testsEnabled || empty($testFiles)) {
+        if (! $this->testsEnabled) {
             return ['passed' => true, 'total' => 0, 'skipped' => true];
         }
 
-        $runner  = new TestRunner($this->projectRoot);
+        $testsDir = base_path(config('codeguardian.output.tests_dir', 'tests/CodeGuardian'));
+
+        if (! is_dir($testsDir)) {
+            return ['passed' => true, 'total' => 0, 'skipped' => true];
+        }
+
+        $runner = new TestRunner($this->projectRoot);
 
         if (! $runner->isAvailable($this->projectType)) {
             $this->warn('  PHPUnit/Pest not found. Skipping test run.');
             return ['passed' => true, 'total' => 0, 'skipped' => true];
         }
 
-        $testsDir = base_path(config('codeguardian.output.tests_dir', 'tests/CodeGuardian'));
-        $result   = $runner->run($testsDir, $this->projectType);
-
-        return $result;
+        return $runner->run($testsDir, $this->projectType);
     }
 
     private function runRefactoring(array $analysisResults, array $context): array
@@ -300,10 +325,15 @@ class RefactorCommand extends Command
             return [];
         }
 
-        $staticOrchestrator = new StaticOrchestrator();
-        $refactorResults    = [];
-        $fileCount          = 0;
-        $totalFiles         = count($findingsByFile);
+        $refactorResults = [];
+        $fileCount       = 0;
+        $totalFiles      = count($findingsByFile);
+        $projectRealPath = realpath($this->projectRoot) ?: $this->projectRoot;
+
+        // Hoist TestRunner — one instance for all per-file test runs
+        $runner = ($this->testsEnabled && $this->interactiveMode)
+            ? new TestRunner($this->projectRoot)
+            : null;
 
         foreach ($findingsByFile as $filePath => $issues) {
             $fileCount++;
@@ -313,7 +343,7 @@ class RefactorCommand extends Command
 
             foreach ($issues as $issue) {
                 $sev   = strtoupper($issue['severity'] ?? 'medium');
-                $title = $issue['title'] ?? 'Issue';
+                $title = mb_substr($issue['title'] ?? 'Issue', 0, 80);
                 $this->line("    [{$sev}] {$title}");
             }
 
@@ -324,64 +354,59 @@ class RefactorCommand extends Command
                 }
             }
 
-            $fullPath = $this->projectRoot . '/' . ltrim($filePath, '/');
+            // Build and validate full path — guard against path traversal
+            $candidatePath = $projectRealPath . DIRECTORY_SEPARATOR . ltrim($filePath, '/\\');
+            $fullPath      = realpath($candidatePath) ?: $candidatePath;
+
+            if (! str_starts_with($fullPath, $projectRealPath)) {
+                $this->error("  Unsafe path rejected (outside project root): {$filePath}");
+                continue;
+            }
+
             if (! file_exists($fullPath)) {
                 $this->warn("  File not found: {$fullPath} — skipping.");
                 continue;
             }
 
-            $originalContent = file_get_contents($fullPath);
+            $originalContent = File::get($fullPath);  // consistent with File::put below
 
             if ($this->backupEnabled) {
                 $this->backups[$filePath] = $originalContent;
             }
 
-            // Static deterministic refactoring (no AI needed)
             $this->line('  Applying static refactoring rules...');
-            $result = $staticOrchestrator->refactorFile($filePath, $originalContent, $issues);
+            $result = $this->orchestrator->refactorFile($filePath, $originalContent, $issues);
 
-            if (! $result->hasChanges()) {
-                $this->warn("  No auto-fixable patterns found in {$filePath}. See manual TODOs:");
-                foreach ($result->changes as $change) {
-                    $this->line("     → {$change}");
-                }
-                $refactorResults[$filePath] = [
-                    'status'      => 'manual_required',
-                    'issues'      => count($issues),
-                    'auto_fixed'  => 0,
-                    'manual_todos' => $result->manualTodos,
-                    'changes'     => $result->changes,
-                ];
-                continue;
+            // Always show the change list — even if only manual TODOs
+            foreach ($result->changes as $change) {
+                $icon = str_starts_with($change, '[MANUAL]') ? '⚠ ' : '✔ ';
+                $this->line("     {$icon}{$change}");
             }
 
-            File::put($fullPath, $result->refactored);
-            $this->info("  ✔  File updated: {$filePath}");
-
-            foreach ($result->changes as $change) {
-                $icon = str_starts_with($change, '[MANUAL]') ? '⚠' : '✔';
-                $this->line("     {$icon} {$change}");
+            if ($result->hasChanges()) {
+                File::put($fullPath, $result->refactored);
+                $this->info("  ✔  File saved ({$result->autoFixed} auto-fix(es), {$result->manualTodos} manual TODO(s))");
+            } else {
+                $this->line("  ↔  No auto-fixable patterns — {$result->manualTodos} manual item(s) listed above");
             }
 
             $refactorResults[$filePath] = [
-                'status'       => 'refactored',
+                'status'       => $result->hasChanges() ? 'refactored' : 'manual_required',
                 'issues'       => count($issues),
                 'auto_fixed'   => $result->autoFixed,
                 'manual_todos' => $result->manualTodos,
                 'changes'      => $result->changes,
             ];
 
-            // Run tests after each file refactoring (one-by-one mode)
-            if ($this->testsEnabled && $this->interactiveMode) {
+            // Per-file test verification (interactive mode only)
+            if ($runner !== null && $result->hasChanges()) {
                 $testsDir = base_path(config('codeguardian.output.tests_dir', 'tests/CodeGuardian'));
                 if (is_dir($testsDir)) {
                     $this->line('  Running tests to verify...');
-                    $runner      = new TestRunner($this->projectRoot);
-                    $testResult  = $runner->run($testsDir, $this->projectType);
+                    $testResult = $runner->run($testsDir, $this->projectType);
+                    $this->printTestResult("After " . basename($filePath), $testResult);
 
-                    $this->printTestResult("After {$filePath}", $testResult);
-
-                    if (! $testResult['passed']) {
+                    if (! ($testResult['passed'] ?? true)) {
                         $this->error("  ⚠️  Tests failed after refactoring {$filePath}!");
                         $choice = $this->choice(
                             'What do you want to do?',
@@ -389,13 +414,11 @@ class RefactorCommand extends Command
                             0
                         );
 
-                        match ($choice) {
-                            'Rollback this file' => $this->rollbackFile($filePath, $fullPath),
-                            'Stop refactoring'   => $this->stopRefactoring($refactorResults),
-                            default              => null,
-                        };
-
-                        if ($choice === 'Stop refactoring') {
+                        if ($choice === 'Rollback this file') {
+                            $this->rollbackFile($filePath, $fullPath);
+                            $refactorResults[$filePath]['status'] = 'rolled_back';
+                        } elseif ($choice === 'Stop refactoring') {
+                            $this->stopRefactoring();
                             return $refactorResults;
                         }
                     }
@@ -439,17 +462,6 @@ class RefactorCommand extends Command
         return $byFile;
     }
 
-    private function collectIssues(array $agentResults): array
-    {
-        $issues = [];
-        foreach ($agentResults as $result) {
-            foreach ($result['findings'] ?? [] as $f) {
-                $issues[] = $f;
-            }
-        }
-        return $issues;
-    }
-
     private function rollbackFile(string $filePath, string $fullPath): void
     {
         if (isset($this->backups[$filePath])) {
@@ -460,7 +472,11 @@ class RefactorCommand extends Command
         }
     }
 
-    private function stopRefactoring(array &$results): void
+    /**
+     * Roll back ALL changed files to their backed-up originals.
+     * Separated from the return-flow — caller decides what to do after.
+     */
+    private function stopRefactoring(): void
     {
         $this->warn('  Stopping refactoring. Rolling back all changed files...');
         foreach ($this->backups as $filePath => $originalContent) {
@@ -468,29 +484,26 @@ class RefactorCommand extends Command
             File::put($fullPath, $originalContent);
             $this->line("  ↩  Rolled back: {$filePath}");
         }
-        $results['stopped'] = true;
     }
 
-    private function handleTestFailure(array $testFiles): void
+    private function handleTestFailure(): void
     {
         $this->newLine();
         $this->error('  ⚠️  Tests failed after refactoring!');
 
-        if ($this->interactiveMode) {
-            $choice = $this->choice(
-                'Tests are failing. What do you want to do?',
-                ['Rollback all changes', 'Keep changes and review manually', 'Ignore and continue'],
-                0
-            );
+        if (! $this->interactiveMode) {
+            return;
+        }
 
-            if ($choice === 'Rollback all changes') {
-                foreach ($this->backups as $filePath => $original) {
-                    $fullPath = $this->projectRoot . '/' . ltrim($filePath, '/');
-                    File::put($fullPath, $original);
-                    $this->line("  ↩  Rolled back: {$filePath}");
-                }
-                $this->info('  All changes rolled back.');
-            }
+        $choice = $this->choice(
+            'Tests are failing. What do you want to do?',
+            ['Rollback all changes', 'Keep changes and review manually', 'Ignore and continue'],
+            0
+        );
+
+        if ($choice === 'Rollback all changes') {
+            $this->stopRefactoring();
+            $this->info('  All changes rolled back.');
         }
     }
 
@@ -542,16 +555,25 @@ class RefactorCommand extends Command
 
     private function printAnalysisSummary(array $results): void
     {
-        $summary  = $results['summary'] ?? [];
-        $scores   = $results['scores'] ?? [];
-        $overall  = $results['overall_score'] ?? 'N/A';
+        $summary = $results['summary'] ?? [];
+        $overall = $results['overall_score'] ?? 'N/A';
+        $grade   = $results['grade'] ?? '';
 
         $this->newLine();
-        $this->info("  Overall Score : {$overall}/100");
-        foreach ($scores as $key => $val) {
-            $label = ucwords(str_replace('_score', '', str_replace('_', ' ', $key)));
-            $color = $val >= 80 ? 'info' : ($val >= 60 ? 'warn' : 'error');
-            $this->{$color}("  {$label} : {$val}/100");
+        $overallColor = is_int($overall) ? ($overall >= 80 ? 'info' : ($overall >= 60 ? 'warn' : 'error')) : 'info';
+        $this->{$overallColor}("  Overall Score : {$overall}/100  (Grade: {$grade})");
+
+        // Extract per-agent scores from agent_results (not a separate 'scores' key)
+        foreach ($results['agent_results'] ?? [] as $agentData) {
+            foreach (array_keys($agentData) as $k) {
+                if (str_ends_with($k, '_score')) {
+                    $label = ucwords(str_replace(['_score', '_'], [' ', ' '], $k));
+                    $val   = $agentData[$k];
+                    $color = $val >= 80 ? 'info' : ($val >= 60 ? 'warn' : 'error');
+                    $this->{$color}("  {$label} : {$val}/100");
+                    break;
+                }
+            }
         }
         $this->newLine();
 
