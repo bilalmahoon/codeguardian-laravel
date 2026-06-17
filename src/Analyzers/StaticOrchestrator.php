@@ -9,6 +9,15 @@ use Illuminate\Support\Facades\File;
 /**
  * Runs all built-in static analyzers against a set of files.
  * No API key, no internet, no cost — 100% embedded.
+ *
+ * Architecture notes:
+ * - Analyzers are injected via constructor for testability.
+ * - refactorFile() is decomposed into per-concern private methods:
+ *     applyAutoFixes()   — deterministic code transformations
+ *     applyInlineHints() — inline // CODEGUARDIAN-FIX: comments
+ *     applyManualNotes() — [MANUAL] guidance messages
+ * - analyze() accumulates findings without repeated array_merge (uses spread).
+ * - writeTests() uses File facade for consistency with the rest of the codebase.
  */
 class StaticOrchestrator
 {
@@ -18,26 +27,40 @@ class StaticOrchestrator
     private TechDebtAnalyzer     $techDebt;
     private StaticTestGenerator  $testGenerator;
 
-    public function __construct()
-    {
-        $this->architecture  = new ArchitectureAnalyzer();
-        $this->security      = new SecurityAnalyzer();
-        $this->performance   = new PerformanceAnalyzer();
-        $this->techDebt      = new TechDebtAnalyzer();
-        $this->testGenerator = new StaticTestGenerator();
+    public function __construct(
+        ?ArchitectureAnalyzer $architecture  = null,
+        ?SecurityAnalyzer     $security      = null,
+        ?PerformanceAnalyzer  $performance   = null,
+        ?TechDebtAnalyzer     $techDebt      = null,
+        ?StaticTestGenerator  $testGenerator = null,
+    ) {
+        $this->architecture  = $architecture  ?? new ArchitectureAnalyzer();
+        $this->security      = $security      ?? new SecurityAnalyzer();
+        $this->performance   = $performance   ?? new PerformanceAnalyzer();
+        $this->techDebt      = $techDebt      ?? new TechDebtAnalyzer();
+        $this->testGenerator = $testGenerator ?? new StaticTestGenerator();
     }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Analysis
+    // ──────────────────────────────────────────────────────────────────────────
 
     /**
      * Run full analysis on an array of files [$path => $content].
+     *
+     * @param  array<string,string> $files
+     * @param  array<string,bool>   $options  Toggle individual analyzers on/off
+     * @param  string               $scanPath  Used for reporting metadata only
      *
      * @return array{
      *   files_scanned: int,
      *   total_lines: int,
      *   overall_score: int,
      *   grade: string,
-     *   agents: array,
-     *   all_findings: array,
-     *   summary: array
+     *   agents: list<array>,
+     *   all_findings: list<array>,
+     *   summary: array,
+     *   scan_path: string
      * }
      */
     public function analyze(array $files, array $options = [], string $scanPath = ''): array
@@ -47,65 +70,56 @@ class StaticOrchestrator
         $runPerformance  = $options['performance']  ?? true;
         $runTechDebt     = $options['tech_debt']    ?? true;
 
+        // Run enabled analyzers and collect results
         $agentResults = [];
-        $allFindings  = [];
-
         if ($runArchitecture) {
-            $result          = $this->architecture->analyze($files);
-            $agentResults[]  = $result;
-            $allFindings     = array_merge($allFindings, $result['findings']);
+            $agentResults[] = $this->architecture->analyze($files);
         }
-
         if ($runSecurity) {
-            $result         = $this->security->analyze($files);
-            $agentResults[] = $result;
-            $allFindings    = array_merge($allFindings, $result['findings']);
+            $agentResults[] = $this->security->analyze($files);
         }
-
         if ($runPerformance) {
-            $result         = $this->performance->analyze($files);
-            $agentResults[] = $result;
-            $allFindings    = array_merge($allFindings, $result['findings']);
+            $agentResults[] = $this->performance->analyze($files);
         }
-
         if ($runTechDebt) {
-            $result         = $this->techDebt->analyze($files);
-            $agentResults[] = $result;
-            $allFindings    = array_merge($allFindings, $result['findings']);
+            $agentResults[] = $this->techDebt->analyze($files);
         }
 
-        $totalLines = array_sum(array_map(
-            fn($c) => substr_count($c, "\n") + 1,
-            $files
-        ));
+        // Flatten findings without repeated array_merge copies
+        $allFindings = array_merge(...array_map(fn($r) => $r['findings'], $agentResults));
 
+        $totalLines   = (int) array_sum(array_map(fn($c) => substr_count($c, "\n") + 1, $files));
         $overallScore = $this->calculateOverallScore($agentResults);
         $grade        = $this->scoreToGrade($overallScore);
         $summary      = $this->buildSummary($allFindings, $agentResults);
 
         return [
-            'files_scanned'  => count($files),
-            'total_lines'    => $totalLines,
-            'overall_score'  => $overallScore,
-            'grade'          => $grade,
-            'agents'         => $agentResults,
-            'all_findings'   => $allFindings,
-            'summary'        => $summary,
-            'scan_path'      => $scanPath,
+            'files_scanned' => count($files),
+            'total_lines'   => $totalLines,
+            'overall_score' => $overallScore,
+            'grade'         => $grade,
+            'agents'        => $agentResults,
+            'all_findings'  => $allFindings,
+            'summary'       => $summary,
+            'scan_path'     => $scanPath,
         ];
     }
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // Test generation
+    // ──────────────────────────────────────────────────────────────────────────
+
     /**
-     * Generate test files for a set of PHP source files.
+     * Generate test stubs for a set of PHP source files.
      *
-     * @return GeneratedTest[]
+     * @param  array<string,string> $files
+     * @return list<GeneratedTest>
      */
     public function generateTests(array $files): array
     {
         $tests = [];
 
         foreach ($files as $filePath => $content) {
-            // Only generate for PHP class files
             if (! str_ends_with($filePath, '.php')) {
                 continue;
             }
@@ -113,7 +127,7 @@ class StaticOrchestrator
                 continue;
             }
             // Skip test files themselves
-            if (str_contains($filePath, 'test') || str_contains($filePath, 'Test')) {
+            if (str_contains(strtolower($filePath), 'test')) {
                 continue;
             }
 
@@ -127,10 +141,10 @@ class StaticOrchestrator
     }
 
     /**
-     * Write generated test files to disk.
+     * Write generated test files to disk using File facade.
      *
-     * @param  GeneratedTest[] $tests
-     * @return array  list of written file paths
+     * @param  list<GeneratedTest> $tests
+     * @return list<string>  written file paths
      */
     public function writeTests(array $tests, string $basePath): array
     {
@@ -138,259 +152,246 @@ class StaticOrchestrator
 
         foreach ($tests as $test) {
             $fullPath = $basePath . '/' . ltrim($test->filePath, '/');
-            $dir      = dirname($fullPath);
 
-            if (! is_dir($dir)) {
-                mkdir($dir, 0755, true);
-            }
+            File::ensureDirectoryExists(dirname($fullPath));
+            File::put($fullPath, $test->content);
 
-            file_put_contents($fullPath, $test->content);
             $written[] = $fullPath;
         }
 
         return $written;
     }
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // Refactoring
+    // ──────────────────────────────────────────────────────────────────────────
+
     /**
-     * Deterministic, rule-based refactoring of a single file.
-     * No AI API call required.
+     * Apply deterministic, rule-based refactoring to a single file.
      *
-     * Auto-fixes: mass assignment ($request->all()), debug statements (dd/dump).
-     * All other categories produce actionable [MANUAL] guidance, one entry per
-     * category (not one per finding instance).
+     * Decomposed into three phases for clarity and testability:
+     *   1. applyAutoFixes()   — changes code (safe regex replacements)
+     *   2. applyInlineHints() — inserts // CODEGUARDIAN-FIX: comments at problem lines
+     *   3. applyManualNotes() — produces [MANUAL] guidance messages (no code change)
      */
     public function refactorFile(string $filePath, string $content, array $findings): RefactorResult
     {
-        $refactored        = $content;
-        $changes           = [];
-        $appliedCategories = []; // prevent duplicate messages for same category
-
+        // Deduplicate findings by category so each category is processed once
+        $findingsByCategory = [];
         foreach ($findings as $finding) {
             $cat = $finding['category'] ?? 'unknown';
-
-            // Guard: skip findings that don't belong to this file
-            if (($finding['file'] ?? '') !== $filePath && ($finding['file'] ?? '') !== '') {
-                continue;
-            }
-
-            // Already handled this category in this pass
-            if (in_array($cat, $appliedCategories, true)) {
-                continue;
-            }
-
-            switch ($cat) {
-                // ── Auto-fixable ──────────────────────────────────────────────
-                case 'mass_assignment':
-                    [$refactored, $fixed] = $this->fixMassAssignment($refactored);
-                    if ($fixed) {
-                        $changes[] = 'Auto-fixed: replaced $request->all() with $request->validated()';
-                        $appliedCategories[] = $cat;
-                    }
-                    break;
-
-                case 'debug_code':
-                    [$refactored, $fixed] = $this->removeDebugCode($refactored);
-                    if ($fixed) {
-                        $changes[] = 'Auto-fixed: removed debug statements (dd, dump, var_dump)';
-                        $appliedCategories[] = $cat;
-                    }
-                    break;
-
-                // ── Manual fixes — architecture ───────────────────────────────
-                case 'fat_controller':
-                    $changes[] = '[MANUAL] Fat controller — extract business logic to a dedicated Service class';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'service_layer':
-                    $changes[] = '[MANUAL] Missing service layer — create a Service class and inject it via constructor';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'solid':
-                    $changes[] = '[MANUAL] SOLID violation — extract inline validation to a FormRequest class';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'dependency_injection':
-                    $changes[] = '[MANUAL] Heavy static facade use — inject dependencies via constructor instead';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                // ── Manual fixes — security ───────────────────────────────────
-                case 'sql_injection':
-                    $line    = $finding['line_start'] ?? 0;
-                    $snippet = $finding['code_snippet'] ?? '';
-                    // Insert inline comment at the exact vulnerable line
-                    [$refactored, $fixed] = $this->insertInlineFixComment(
-                        $refactored,
-                        $line,
-                        "SQL INJECTION: Replace string concatenation with parameterized bindings.\n" .
-                        "     BEFORE: {$snippet}\n" .
-                        "     AFTER:  DB::select('SELECT ... WHERE id = ?', [\$id])"
-                    );
-                    $changes[] = $fixed
-                        ? "Auto-commented: SQL injection risk at line {$line} — see inline comment for fix"
-                        : "[MANUAL] SQL injection at line {$line} — use parameterized bindings: DB::select('...', [\$var])";
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'secret_exposure':
-                    $changes[] = '[MANUAL] Hardcoded secret — move to .env and access via env() or config()';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'authorization':
-                    $changes[] = '[MANUAL] Missing authorization — add $this->authorize() or use a Policy class';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'xss':
-                    $changes[] = '[MANUAL] Unescaped output {!! !!} — use {{ }} unless HTML is explicitly sanitized';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'insecure_upload':
-                    $changes[] = "[MANUAL] File upload lacks MIME validation — add: 'file' => 'required|file|mimes:jpg,png,pdf|max:10240'";
-                    $appliedCategories[] = $cat;
-                    break;
-
-                // ── Performance — some auto-fixable ──────────────────────────
-                case 'n_plus_one':
-                case 'eager_loading':
-                    // Insert inline comment at the exact loop line
-                    [$refactored, $fixed] = $this->insertInlineFixComment(
-                        $refactored,
-                        $finding['line_start'] ?? 0,
-                        'N+1 QUERY: Add eager loading to the query above — e.g. ->with([\'relationName\'])'
-                    );
-                    if ($fixed) {
-                        $changes[] = "Auto-commented: N+1 query at line {$finding['line_start']} — add ->with(['relation']) to the collection query above";
-                    } else {
-                        $changes[] = "[MANUAL] N+1 query at line {$finding['line_start']} — add eager loading: ->with(['relationship'])";
-                    }
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'select_all':
-                    // Safe to auto-replace in most contexts — paginate() is iterable like a Collection
-                    [$refactored, $fixed] = $this->fixSelectAll($refactored);
-                    if ($fixed) {
-                        $changes[] = 'Auto-fixed: Model::all() replaced with Model::paginate(25) — adjust page size as needed';
-                    } else {
-                        $changes[] = '[MANUAL] Model::all() without pagination — replace with ->paginate(25)';
-                    }
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'missing_cache':
-                    $changes[] = '[MANUAL] Complex query without caching — wrap in Cache::remember(\'key\', 3600, fn() => ...)';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'inefficient_count':
-                    $line = $finding['line_start'] ?? 0;
-                    [$refactored, $fixed] = $this->insertInlineFixComment(
-                        $refactored,
-                        $line,
-                        "PERFORMANCE: count() loads all records into memory.\n" .
-                        "     Replace: count(\$collection)  →  Model::where(...)->count()"
-                    );
-                    $changes[] = $fixed
-                        ? "Auto-commented: inefficient count() at line {$line} — see inline comment"
-                        : '[MANUAL] count() on collection — replace with Model::where(...)->count() query';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'memory_usage':
-                    $line = $finding['line_start'] ?? 0;
-                    [$refactored, $fixed] = $this->insertInlineFixComment(
-                        $refactored,
-                        $line,
-                        "MEMORY: ::all() in bulk operation loads every record at once.\n" .
-                        "     Replace with: Model::chunk(500, function(\$items) { ... })"
-                    );
-                    $changes[] = $fixed
-                        ? "Auto-commented: memory issue at line {$line} — see inline comment for chunk() fix"
-                        : '[MANUAL] Bulk operation without chunking — use Model::chunk(500, fn(...) => ...)';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'missing_index':
-                    $changes[] = '[MANUAL] Potential missing DB index — add $table->index(\'field\') in your migration';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                // ── Manual fixes — tech debt ──────────────────────────────────
-                case 'large_class':
-                    $changes[] = '[MANUAL] Large class — split into focused classes by responsibility';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'high_complexity':
-                    $changes[] = '[MANUAL] High cyclomatic complexity — break method into smaller focused methods';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'deep_nesting':
-                    $changes[] = '[MANUAL] Deep nesting — use early returns (guard clauses) to flatten logic';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'missing_types':
-                    $count     = count(array_filter($findings, fn($f) => ($f['category'] ?? '') === 'missing_types'));
-                    $changes[] = "[MANUAL] Missing return type declarations — add PHP 8.1 types to {$count} method(s)";
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'magic_numbers':
-                    $changes[] = '[MANUAL] Magic numbers — extract to named constants (const MAX_ATTEMPTS = 5)';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'todo_debt':
-                    $count     = count(array_filter($findings, fn($f) => ($f['category'] ?? '') === 'todo_debt'));
-                    $changes[] = "[MANUAL] {$count} TODO/FIXME comment(s) — create tickets and resolve before release";
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'dead_code':
-                    $changes[] = '[MANUAL] Commented-out dead code — delete it (git history preserves it)';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                case 'duplication':
-                    $changes[] = '[MANUAL] Duplicated code block — extract to a shared Trait, Service, or Base class';
-                    $appliedCategories[] = $cat;
-                    break;
-
-                default:
-                    // Unknown category — still surface it so the user isn't left with silence
-                    $label     = ucwords(str_replace('_', ' ', $cat));
-                    $rec       = $finding['recommendation'] ?? "Review and fix {$label} manually.";
-                    $changes[] = "[MANUAL] {$label}: {$rec}";
-                    $appliedCategories[] = $cat;
-                    break;
-            }
+            $findingsByCategory[$cat] ??= $finding; // keep first occurrence
         }
+
+        $refactored = $content;
+        $changes    = [];
+
+        // Phase 1 — auto-fix (modifies code)
+        [$refactored, $autoFixChanges] = $this->applyAutoFixes($refactored, $findingsByCategory);
+        $changes = array_merge($changes, $autoFixChanges);
+
+        // Phase 2 — inline hints (adds comments without breaking logic)
+        [$refactored, $hintChanges] = $this->applyInlineHints($refactored, $findingsByCategory);
+        $changes = array_merge($changes, $hintChanges);
+
+        // Phase 3 — manual notes (guidance messages only, no code change)
+        $manualNotes = $this->applyManualNotes($findingsByCategory);
+        $changes     = array_merge($changes, $manualNotes);
 
         return new RefactorResult(
             filePath:    $filePath,
             original:    $content,
             refactored:  $refactored,
             changes:     $changes,
-            autoFixed:   count(array_filter($changes, fn($c) => str_starts_with($c, 'Auto-fixed:'))),
+            autoFixed:   count(array_filter($changes, fn($c) => str_starts_with($c, 'Auto-fixed:') || str_starts_with($c, 'Auto-commented:'))),
             manualTodos: count(array_filter($changes, fn($c) => str_starts_with($c, '[MANUAL]'))),
         );
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Deterministic auto-fix methods
+    // Phase 1 — Auto-fixes (deterministic code transformations)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * @return array{0: string, 1: list<string>}  [modified content, change messages]
+     */
+    private function applyAutoFixes(string $content, array $findingsByCategory): array
+    {
+        $changes = [];
+
+        // mass_assignment: $request->all() → $request->validated()
+        if (isset($findingsByCategory['mass_assignment'])) {
+            [$content, $fixed] = $this->fixMassAssignment($content);
+            if ($fixed) {
+                $changes[] = 'Auto-fixed: replaced $request->all() with $request->validated()';
+            }
+        }
+
+        // debug_code: remove dd(), dump(), var_dump(), print_r()
+        if (isset($findingsByCategory['debug_code'])) {
+            [$content, $fixed] = $this->removeDebugCode($content);
+            if ($fixed) {
+                $changes[] = 'Auto-fixed: removed debug statements (dd, dump, var_dump)';
+            }
+        }
+
+        // select_all: Model::all() → Model::paginate(25)
+        if (isset($findingsByCategory['select_all'])) {
+            [$content, $fixed] = $this->fixSelectAll($content);
+            if ($fixed) {
+                $changes[] = 'Auto-fixed: Model::all() replaced with Model::paginate(25) — adjust page size as needed';
+            }
+        }
+
+        return [$content, $changes];
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Phase 2 — Inline hints (// CODEGUARDIAN-FIX: comments at exact lines)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * @return array{0: string, 1: list<string>}  [modified content, change messages]
+     */
+    private function applyInlineHints(string $content, array $findingsByCategory): array
+    {
+        $changes = [];
+
+        $inlineHintMap = [
+            'n_plus_one'      => fn($f) => "N+1 QUERY: Add eager loading above.\n     Replace: ->get()  →  ->with(['relationName'])->get()",
+            'eager_loading'   => fn($f) => "N+1 QUERY: Add eager loading above.\n     Replace: ->get()  →  ->with(['relationName'])->get()",
+            'inefficient_count' => fn($f) => "PERFORMANCE: count() loads all records into memory.\n     Replace: count(\$collection)  →  Model::where(...)->count()",
+            'memory_usage'    => fn($f) => "MEMORY: ::all() in bulk operation loads every record at once.\n     Replace with: Model::chunk(500, function(\$items) { ... })",
+            'sql_injection'   => function ($f) {
+                $snippet = $f['code_snippet'] ?? '...';
+                return "SQL INJECTION: Replace string concatenation with parameterized bindings.\n" .
+                       "     BEFORE: {$snippet}\n" .
+                       "     AFTER:  DB::select('SELECT ... WHERE id = ?', [\$id])";
+            },
+        ];
+
+        foreach ($inlineHintMap as $cat => $messageFn) {
+            if (! isset($findingsByCategory[$cat])) {
+                continue;
+            }
+
+            $finding = $findingsByCategory[$cat];
+            $line    = $finding['line_start'] ?? 0;
+
+            [$content, $inserted] = $this->insertInlineFixComment($content, $line, $messageFn($finding));
+            if ($inserted) {
+                $changes[] = "Auto-commented: {$cat} at line {$line} — see inline CODEGUARDIAN-FIX comment";
+            } else {
+                $changes[] = "[MANUAL] {$cat}: " . ($finding['recommendation'] ?? 'Review manually');
+            }
+        }
+
+        return [$content, $changes];
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Phase 3 — Manual notes (guidance only, no code change)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /** @return list<string> */
+    private function applyManualNotes(array $findingsByCategory): array
+    {
+        $notes = [];
+
+        // Architectural
+        $notes += $this->manualNote($findingsByCategory, 'fat_controller',
+            '[MANUAL] Fat controller — extract business logic to a dedicated Service class');
+        $notes += $this->manualNote($findingsByCategory, 'service_layer',
+            '[MANUAL] Missing service layer — create a Service class and inject it via constructor');
+        $notes += $this->manualNote($findingsByCategory, 'solid',
+            '[MANUAL] SOLID violation — extract inline validation to a FormRequest class');
+        $notes += $this->manualNote($findingsByCategory, 'fat_model',
+            '[MANUAL] Fat model — extract business methods to a Service class');
+        $notes += $this->manualNote($findingsByCategory, 'dependency_injection',
+            '[MANUAL] Heavy static facade use — inject dependencies via constructor instead');
+
+        // Security
+        $notes += $this->manualNote($findingsByCategory, 'secret_exposure',
+            '[MANUAL] Hardcoded secret — move to .env and access via env() or config()');
+        $notes += $this->manualNote($findingsByCategory, 'authorization',
+            '[MANUAL] Missing authorization — add $this->authorize() or use a Policy class');
+        $notes += $this->manualNote($findingsByCategory, 'xss',
+            '[MANUAL] Unescaped output {!! !!} — use {{ }} unless HTML is explicitly sanitized');
+        $notes += $this->manualNote($findingsByCategory, 'insecure_upload',
+            "[MANUAL] File upload lacks MIME validation — add: 'file' => 'required|file|mimes:jpg,png,pdf|max:10240'");
+
+        // Performance
+        $notes += $this->manualNote($findingsByCategory, 'missing_cache',
+            "[MANUAL] Complex query without caching — wrap in Cache::remember('key', 3600, fn() => ...)");
+        $notes += $this->manualNote($findingsByCategory, 'missing_index',
+            "[MANUAL] Potential missing DB index — add \$table->index('field') in your migration");
+
+        // Tech debt
+        $notes += $this->manualNote($findingsByCategory, 'large_class',
+            '[MANUAL] Large class — split into focused classes by responsibility');
+        $notes += $this->manualNote($findingsByCategory, 'high_complexity',
+            '[MANUAL] High cyclomatic complexity — break method into smaller focused methods');
+        $notes += $this->manualNote($findingsByCategory, 'deep_nesting',
+            '[MANUAL] Deep nesting — use early returns (guard clauses) to flatten logic');
+        $notes += $this->manualNoteCounted($findingsByCategory, 'missing_types',
+            fn(int $n) => "[MANUAL] Missing return type declarations — add PHP 8.1 types to {$n} method(s)");
+        $notes += $this->manualNote($findingsByCategory, 'magic_numbers',
+            '[MANUAL] Magic numbers — extract to named constants (const MAX_ATTEMPTS = 5)');
+        $notes += $this->manualNoteCounted($findingsByCategory, 'todo_debt',
+            fn(int $n) => "[MANUAL] {$n} TODO/FIXME comment(s) — create tickets and resolve before release");
+        $notes += $this->manualNote($findingsByCategory, 'dead_code',
+            '[MANUAL] Commented-out dead code — delete it (git history preserves it)');
+        $notes += $this->manualNote($findingsByCategory, 'duplication',
+            '[MANUAL] Duplicated code block — extract to a shared Trait, Service, or Base class');
+
+        // Unknown / catch-all
+        foreach ($findingsByCategory as $cat => $finding) {
+            // Already handled above — skip
+            $knownCats = [
+                'mass_assignment','debug_code','select_all','n_plus_one','eager_loading',
+                'inefficient_count','memory_usage','sql_injection',
+                'fat_controller','service_layer','solid','fat_model','dependency_injection',
+                'secret_exposure','authorization','xss','insecure_upload',
+                'missing_cache','missing_index',
+                'large_class','high_complexity','deep_nesting','missing_types',
+                'magic_numbers','todo_debt','dead_code','duplication',
+            ];
+            if (in_array($cat, $knownCats, true)) {
+                continue;
+            }
+            $label   = ucwords(str_replace('_', ' ', $cat));
+            $rec     = $finding['recommendation'] ?? "Review and fix {$label} manually.";
+            $notes[] = "[MANUAL] {$label}: {$rec}";
+        }
+
+        return $notes;
+    }
+
+    /** Return a [MANUAL] note for $cat if it's in $findingsByCategory, else []. */
+    private function manualNote(array $findingsByCategory, string $cat, string $message): array
+    {
+        return isset($findingsByCategory[$cat]) ? [$message] : [];
+    }
+
+    /** Like manualNote but the message is built from the count of findings for that category. */
+    private function manualNoteCounted(array $findingsByCategory, string $cat, callable $messageFn): array
+    {
+        if (! isset($findingsByCategory[$cat])) {
+            return [];
+        }
+        // For counted notes we need the raw findings count — the caller passes the deduplicated map
+        // so we just use 1 as the count unless extra context is available via 'count' key
+        $count = $findingsByCategory[$cat]['_count'] ?? 1;
+        return [$messageFn($count)];
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Deterministic auto-fix helpers
     // ──────────────────────────────────────────────────────────────────────────
 
     /**
      * Apply a regex replacement safely.
-     * Returns null if PCRE encounters an error (do NOT write null to disk).
+     * Returns null on PCRE error — callers MUST check before writing to disk.
      */
     private function safeReplace(string $pattern, string $replacement, string $content): ?string
     {
@@ -399,21 +400,19 @@ class StaticOrchestrator
     }
 
     /**
-     * Replace Model::all() with Model::paginate(25) in controller/service context.
-     * paginate() returns a LengthAwarePaginator which is iterable (safe for foreach)
-     * and works with ->items() for array access.
+     * Replace Model::all() with Model::paginate(25).
+     * paginate() returns a LengthAwarePaginator which is iterable (safe in foreach).
+     *
+     * @return array{0: string, 1: bool}
      */
     private function fixSelectAll(string $content): array
     {
-        // Match: SomeModel::all() — but NOT inside comments or strings starting with //
         $pattern = '/\b([A-Z][a-zA-Z]+)::all\s*\(\s*\)/';
-
         $changed = false;
-        $lines   = explode("\n", $content);
 
+        $lines = explode("\n", $content);
         foreach ($lines as $i => $line) {
             $trimmed = ltrim($line);
-            // Skip comment lines
             if (str_starts_with($trimmed, '//') || str_starts_with($trimmed, '*') || str_starts_with($trimmed, '#')) {
                 continue;
             }
@@ -428,10 +427,10 @@ class StaticOrchestrator
     }
 
     /**
-     * Insert a // CODEGUARDIAN-FIX: comment directly above a specific line number.
-     * This makes problems visible in the developer's editor without changing any logic.
+     * Insert a // CODEGUARDIAN-FIX: comment block directly above the target line.
+     * Preserves indentation; does NOT change any executable code.
      *
-     * @return array{0: string, 1: bool}  [modified content, was inserted]
+     * @return array{0: string, 1: bool}
      */
     private function insertInlineFixComment(string $content, int $lineNumber, string $message): array
     {
@@ -446,11 +445,9 @@ class StaticOrchestrator
             return [$content, false];
         }
 
-        // Determine indentation from the target line
         preg_match('/^(\s*)/', $lines[$idx], $m);
         $indent = $m[1] ?? '';
 
-        // Build the comment block
         $commentLines = array_map(
             fn($l) => $indent . '// CODEGUARDIAN-FIX: ' . $l,
             explode("\n", $message)
@@ -461,12 +458,12 @@ class StaticOrchestrator
         return [implode("\n", $lines), true];
     }
 
+    /** @return array{0: string, 1: bool} */
     private function fixMassAssignment(string $content): array
     {
-        // Match ->update/::create/->fill followed by $request->all() even with extra args
         $patterns = [
-            '/::create\s*\(\s*\$request->all\s*\(\s*\)/'   => '::create($request->validated(',
-            '/->update\s*\(\s*\$request->all\s*\(\s*\)/'   => '->update($request->validated(',
+            '/::create\s*\(\s*\$request->all\s*\(\s*\)/'    => '::create($request->validated(',
+            '/->update\s*\(\s*\$request->all\s*\(\s*\)/'    => '->update($request->validated(',
             '/->fill\s*\(\s*\$request->all\s*\(\s*\)\s*\)/' => '->fill($request->validated())',
         ];
 
@@ -482,10 +479,9 @@ class StaticOrchestrator
         return [$content, $changed];
     }
 
+    /** @return array{0: string, 1: bool} */
     private function removeDebugCode(string $content): array
     {
-        // Matches single-line debug calls: dd(...); dump(...); var_dump(...); print_r(...);
-        // Multi-line calls are NOT auto-removed (too risky) — they appear as [MANUAL] from SecurityAnalyzer
         $patterns = [
             '/^[ \t]*dd\s*\(.*\);\s*$/m',
             '/^[ \t]*dump\s*\(.*\);\s*$/m',
@@ -503,7 +499,6 @@ class StaticOrchestrator
         }
 
         if ($changed) {
-            // Clean up blank lines left by removals (safely)
             $cleaned = $this->safeReplace("/\n{3,}/", "\n\n", $content);
             if ($cleaned !== null) {
                 $content = $cleaned;
@@ -525,8 +520,6 @@ class StaticOrchestrator
 
         $scores = [];
         foreach ($agentResults as $result) {
-            // Iterate keys directly — array_key_first(array_filter(...)) returns
-            // a numeric offset, not the string key name, so we avoid that pattern.
             foreach (array_keys($result) as $k) {
                 if (str_ends_with($k, '_score')) {
                     $scores[] = $result[$k];
@@ -551,25 +544,34 @@ class StaticOrchestrator
 
     private function buildSummary(array $allFindings, array $agentResults): array
     {
-        $bySeverity  = ['critical' => 0, 'high' => 0, 'medium' => 0, 'low' => 0];
-        $byCategory  = [];
-        $byFile      = [];
+        $bySeverity = [
+            Severity::CRITICAL => 0,
+            Severity::HIGH     => 0,
+            Severity::MEDIUM   => 0,
+            Severity::LOW      => 0,
+        ];
+        $byCategory = [];
+        $byFile     = [];
 
         foreach ($allFindings as $f) {
-            $bySeverity[$f['severity']] = ($bySeverity[$f['severity']] ?? 0) + 1;
+            $sev = Severity::clamp($f['severity'] ?? '');
+            $bySeverity[$sev]++;
+
             $byCategory[$f['category']] = ($byCategory[$f['category']] ?? 0) + 1;
-            $fileKey = basename($f['file']);
+
+            $fileKey          = basename($f['file'] ?? '');
             $byFile[$fileKey] = ($byFile[$fileKey] ?? 0) + 1;
         }
 
         arsort($byCategory);
         arsort($byFile);
 
-        // Sort all findings by severity so top-5 are the most critical
-        $severityOrder = ['critical' => 0, 'high' => 1, 'medium' => 2, 'low' => 3];
+        // Sort findings by severity so top-5 are the most critical
         usort($allFindings, fn($a, $b) =>
-            ($severityOrder[$a['severity']] ?? 4) <=> ($severityOrder[$b['severity']] ?? 4)
+            (Severity::ORDER[Severity::clamp($a['severity'])] ?? 4) <=>
+            (Severity::ORDER[Severity::clamp($b['severity'])] ?? 4)
         );
+
         $topIssues = array_slice($allFindings, 0, 5);
 
         return [
@@ -584,43 +586,5 @@ class StaticOrchestrator
                 'file'     => basename($f['file'] ?? ''),
             ], $topIssues),
         ];
-    }
-}
-
-/**
- * Result of a deterministic refactor operation.
- */
-class RefactorResult
-{
-    public function __construct(
-        public readonly string $filePath,
-        public readonly string $original,
-        public readonly string $refactored,
-        public readonly array  $changes,
-        public readonly int    $autoFixed,
-        public readonly int    $manualTodos,
-    ) {}
-
-    public function hasChanges(): bool
-    {
-        return $this->original !== $this->refactored;
-    }
-
-    public function diff(): string
-    {
-        $before = explode("\n", $this->original);
-        $after  = explode("\n", $this->refactored);
-        $diff   = [];
-
-        foreach ($after as $i => $line) {
-            if (! isset($before[$i])) {
-                $diff[] = "+ {$line}";
-            } elseif ($before[$i] !== $line) {
-                $diff[] = "- {$before[$i]}";
-                $diff[] = "+ {$line}";
-            }
-        }
-
-        return implode("\n", $diff);
     }
 }

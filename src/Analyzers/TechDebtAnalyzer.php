@@ -75,49 +75,33 @@ class TechDebtAnalyzer extends BaseAnalyzer
         }
     }
 
+    /**
+     * Detect methods with high cyclomatic complexity.
+     * Uses BaseAnalyzer::extractMethods() — brace-depth tracking, no duplication.
+     */
     private function checkComplexMethods(string $filePath, string $content): void
     {
-        preg_match_all(
-            '/(?:public|private|protected)\s+function\s+(\w+)\s*\(([^)]{0,200})\)\s*(?::\s*\S+)?\s*\{/m',
-            $content,
-            $matches,
-            PREG_OFFSET_CAPTURE
-        );
+        foreach ($this->extractMethods($content) as $method) {
+            $complexity = $this->cyclomaticComplexity($method['body']);
 
-        $contentLines = explode("\n", $content);
-        $totalLines   = count($contentLines);
-
-        foreach ($matches[1] as $i => $methodMatch) {
-            $methodName   = $methodMatch[0];
-            $methodOffset = $matches[0][$i][1];
-            $methodLine   = substr_count(substr($content, 0, $methodOffset), "\n") + 1;
-
-            // Walk forward to find actual method end
-            $depth   = 0;
-            $endLine = $methodLine;
-            $started = false;
-            for ($ln = $methodLine - 1; $ln < $totalLines && $ln < $methodLine + 300; $ln++) {
-                $l = $contentLines[$ln];
-                $depth += substr_count($l, '{') - substr_count($l, '}');
-                if (! $started && $depth > 0) $started = true;
-                if ($started && $depth <= 0) { $endLine = $ln + 1; break; }
+            if ($complexity < 10) {
+                continue;
             }
 
-            $methodBody = implode("\n", array_slice($contentLines, $methodLine - 1, $endLine - $methodLine + 1));
-            $complexity = $this->cyclomaticComplexity($methodBody);
+            $severity = $complexity >= 20
+                ? Severity::HIGH
+                : ($complexity >= 15 ? Severity::MEDIUM : Severity::LOW);
 
-            if ($complexity >= 10) {
-                $severity = $complexity >= 20 ? 'high' : ($complexity >= 15 ? 'medium' : 'low');
-                $this->addResult(AnalysisResult::make(
-                    category:       'high_complexity',
-                    severity:       $severity,
-                    title:          "High complexity: {$this->baseName($filePath)}::{$methodName}() (complexity: {$complexity})",
-                    description:    "Method '{$methodName}' has cyclomatic complexity of {$complexity}. Ideal is under 10. High complexity means hard to test, maintain, and understand — every branch needs a test case.",
-                    file:           $filePath,
-                    lineStart:      $methodLine,
-                    recommendation: "Break '{$methodName}' into smaller focused methods. Use early returns to reduce nesting. Consider a state machine or strategy pattern.",
-                ));
-            }
+            $this->addResult(AnalysisResult::make(
+                category:       'high_complexity',
+                severity:       $severity,
+                title:          "High complexity: {$this->baseName($filePath)}::{$method['name']}() (complexity: {$complexity})",
+                description:    "Method '{$method['name']}' has cyclomatic complexity of {$complexity}. Ideal is under 10. Every branch needs a test case, so high complexity = high test burden.",
+                file:           $filePath,
+                lineStart:      $method['start_line'],
+                lineEnd:        $method['end_line'],
+                recommendation: "Break '{$method['name']}' into smaller focused methods. Use early returns to reduce nesting.",
+            ));
         }
     }
 
@@ -364,23 +348,18 @@ class TechDebtAnalyzer extends BaseAnalyzer
         }
     }
 
+    /**
+     * Override to use tech-debt specific weight for 'low' (1 instead of 2).
+     * Tech debt findings accumulate gradually so low issues penalise less.
+     */
     private function calculateScore(array $findings): int
     {
+        $weights = array_merge(Severity::WEIGHTS, [Severity::LOW => 1]);
         $score   = 100;
-        $weights = ['critical' => 20, 'high' => 10, 'medium' => 5, 'low' => 1];
         foreach ($findings as $f) {
             $score -= $weights[$f['severity']] ?? 0;
         }
         return max(0, min(100, $score));
-    }
-
-    private function buildSummary(array $findings): array
-    {
-        $counts = ['critical' => 0, 'high' => 0, 'medium' => 0, 'low' => 0];
-        foreach ($findings as $f) {
-            $counts[$f['severity']] = ($counts[$f['severity']] ?? 0) + 1;
-        }
-        return array_merge(['total_issues' => count($findings)], $counts);
     }
 
     private function baseName(string $filePath): string

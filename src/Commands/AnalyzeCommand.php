@@ -87,7 +87,7 @@ class AnalyzeCommand extends Command
         if ($mode === 'ai') {
             $results = $this->runAiAnalysis($context);
         } else {
-            $results = $this->runStaticAnalysis($context['files'] ?? []);
+            $results = $this->runStaticAnalysis($context['files'] ?? [], $path);
         }
 
         if ($results === null) {
@@ -132,11 +132,15 @@ class AnalyzeCommand extends Command
     // Static analysis (default — no API key)
     // ──────────────────────────────────────────────────────────────────────────
 
-    private function runStaticAnalysis(array $files): ?array
+    /**
+     * @param  array<string,string> $files
+     * @param  string               $scanPath  Must be passed in explicitly — $path from handle() is NOT in scope here
+     */
+    private function runStaticAnalysis(array $files, string $scanPath): ?array
     {
         $orchestrator = new StaticOrchestrator();
 
-        $agentsOpt      = $this->option('agents');
+        $agentsOpt       = $this->option('agents');
         $requestedAgents = $agentsOpt ? array_map('trim', explode(',', $agentsOpt)) : [];
 
         $options = [
@@ -146,15 +150,13 @@ class AnalyzeCommand extends Command
             'tech_debt'    => empty($requestedAgents) || in_array('tech_debt', $requestedAgents),
         ];
 
-        $agentNames = array_keys(array_filter($options));
-        foreach ($agentNames as $name) {
+        foreach (array_keys(array_filter($options)) as $name) {
             $this->line("  Running {$name} analyzer...");
         }
 
-        $result = $orchestrator->analyze($files, $options, $path ?? base_path());
+        $result = $orchestrator->analyze($files, $options, $scanPath);
 
-        // Normalize to format expected by formatter
-        return $this->normalizeStaticResult($result, $path ?? base_path());
+        return $this->normalizeStaticResult($result, $scanPath);
     }
 
     private function normalizeStaticResult(array $raw, string $scanPath = ''): array

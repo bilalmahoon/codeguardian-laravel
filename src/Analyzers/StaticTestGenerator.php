@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace CodeGuardian\Laravel\Analyzers;
 
+use CodeGuardian\Laravel\Support\FileTypeDetector;
+
 class StaticTestGenerator
 {
     /**
@@ -14,9 +16,10 @@ class StaticTestGenerator
         $className   = $this->extractClassName($content);
         $namespace   = $this->extractNamespace($content);
         $methods     = $this->extractPublicMethods($content);
-        $isModel     = $this->detectType($filePath, $content) === 'model';
-        $isController = $this->detectType($filePath, $content) === 'controller';
-        $isService   = $this->detectType($filePath, $content) === 'service';
+        $fileType    = FileTypeDetector::classify($filePath, $content);
+        $isModel      = $fileType === 'model';
+        $isController = $fileType === 'controller';
+        $isService    = $fileType === 'service';
 
         if (! $className || empty($methods)) {
             return null;
@@ -368,16 +371,6 @@ PHP;
         return $casts;
     }
 
-    private function detectType(string $filePath, string $content): string
-    {
-        if (str_contains($filePath, 'Controller') || str_contains($filePath, 'controllers')) return 'controller';
-        if (str_contains($filePath, 'Service') || str_contains($filePath, 'services')) return 'service';
-        if (str_contains($filePath, 'Models') || str_contains($filePath, '/Model/')) return 'model';
-        if (preg_match('/extends\s+Model\b/', $content)) return 'model';
-        if (preg_match('/extends\s+Controller\b/', $content)) return 'controller';
-        return 'generic';
-    }
-
     private function buildTestNamespace(string $sourceNs, string $filePath): string
     {
         // Convert App\Http\Controllers\... to Tests\Feature\... or Tests\Unit\...
@@ -450,30 +443,5 @@ PHP;
     private function buildParamVars(array $params): string
     {
         return implode(', ', array_map(fn($p) => '$' . $p['name'], $params));
-    }
-}
-
-/**
- * Value object returned by StaticTestGenerator.
- */
-class GeneratedTest
-{
-    public function __construct(
-        public readonly string $className,
-        public readonly string $filePath,
-        public readonly string $content,
-        public readonly string $sourceFile,
-        public readonly array  $methodsCovered,
-    ) {}
-
-    public function toArray(): array
-    {
-        return [
-            'class'            => $this->className,
-            'file'             => $this->filePath,
-            'source'           => $this->sourceFile,
-            'methods_covered'  => $this->methodsCovered,
-            'lines'            => substr_count($this->content, "\n") + 1,
-        ];
     }
 }

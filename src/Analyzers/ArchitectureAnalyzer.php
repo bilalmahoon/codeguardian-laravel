@@ -4,12 +4,21 @@ declare(strict_types=1);
 
 namespace CodeGuardian\Laravel\Analyzers;
 
+/**
+ * Detects architectural issues:
+ *  - Fat controllers / fat models
+ *  - Direct DB access in controllers without a service layer
+ *  - Inline validation instead of FormRequests
+ *  - Overly long methods
+ *  - Heavy static facade usage
+ */
 class ArchitectureAnalyzer extends BaseAnalyzer
 {
     private const FAT_CONTROLLER_LINE_THRESHOLD   = 150;
     private const FAT_CONTROLLER_METHOD_THRESHOLD = 8;
     private const FAT_MODEL_LINE_THRESHOLD        = 200;
     private const LONG_METHOD_LINE_THRESHOLD      = 40;
+    private const FACADE_USAGE_THRESHOLD          = 5;
 
     public function getName(): string
     {
@@ -33,41 +42,31 @@ class ArchitectureAnalyzer extends BaseAnalyzer
         ];
     }
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // Per-file dispatch
+    // ──────────────────────────────────────────────────────────────────────────
+
     private function analyzeFile(string $filePath, string $content): void
     {
-        $lines  = $this->lineCount($content);
-        $isCtrl = $this->isController($filePath);
-        $isMdl  = $this->isModel($filePath);
+        $lines = $this->lineCount($content);
 
-        // ── Fat Controller ───────────────────────────────────────────────────
-        if ($isCtrl) {
+        if ($this->isController($filePath, $content)) {
             $this->checkFatController($filePath, $content, $lines);
             $this->checkControllerDirectDbAccess($filePath, $content);
             $this->checkMissingFormRequest($filePath, $content);
         }
 
-        // ── Fat Model ────────────────────────────────────────────────────────
-        if ($isMdl && $lines > self::FAT_MODEL_LINE_THRESHOLD) {
-            $this->addResult(AnalysisResult::make(
-                category:       'fat_model',
-                severity:       'medium',
-                title:          "Fat Model: {$this->className($filePath)} ({$lines} lines)",
-                description:    "Model has {$lines} lines. Models should only contain relationships, scopes, casts, and accessors. Business logic should be in Services.",
-                file:           $filePath,
-                lineStart:      1,
-                lineEnd:        $lines,
-                recommendation: 'Extract business logic to a dedicated Service class. Keep model lean.',
-                codeBefore:     "class {$this->className($filePath)} extends Model { // {$lines} lines of mixed logic }",
-                codeAfter:      "class {$this->className($filePath)} extends Model { // Only relationships, casts, scopes }\nclass {$this->className($filePath)}Service { // Business logic here }",
-            ));
+        if ($this->isModel($filePath, $content) && $lines > self::FAT_MODEL_LINE_THRESHOLD) {
+            $this->reportFatModel($filePath, $content, $lines);
         }
 
-        // ── Long methods (all files) ─────────────────────────────────────────
         $this->checkLongMethods($filePath, $content);
-
-        // ── Missing dependency injection ─────────────────────────────────────
         $this->checkStaticFacadeOveruse($filePath, $content);
     }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Individual checks
+    // ──────────────────────────────────────────────────────────────────────────
 
     private function checkFatController(string $filePath, string $content, int $lines): void
     {
@@ -75,191 +74,167 @@ class ArchitectureAnalyzer extends BaseAnalyzer
             return;
         }
 
-        // Count public methods
         $methodCount = preg_match_all('/public\s+function\s+\w+\s*\(/', $content);
-
-        $severity = $lines > 300 ? 'critical' : ($lines > 200 ? 'high' : 'medium');
+        $severity    = $lines > 300 ? Severity::CRITICAL : ($lines > 200 ? Severity::HIGH : Severity::MEDIUM);
+        $className   = $this->className($filePath);
+        $serviceName = $this->className($filePath, 'Service');
 
         $this->addResult(AnalysisResult::make(
             category:       'fat_controller',
             severity:       $severity,
-            title:          "Fat Controller: {$this->className($filePath)} ({$lines} lines, {$methodCount} methods)",
-            description:    "Controller has {$lines} lines and {$methodCount} public methods. Controllers should only handle HTTP request/response. Business logic belongs in Service classes.",
+            title:          "Fat Controller: {$className} ({$lines} lines, {$methodCount} methods)",
+            description:    "Controller has {$lines} lines and {$methodCount} public methods. Controllers should only handle HTTP request/response; business logic belongs in Service classes.",
             file:           $filePath,
             lineStart:      1,
             lineEnd:        $lines,
-            recommendation: 'Create a ' . $this->className($filePath, 'Service') . ' and move business logic there. Inject it via constructor.',
-            codeBefore:     "class {$this->className($filePath)} extends Controller {\n    public function store(Request \$request) {\n        // 50+ lines of business logic\n    }\n}",
-            codeAfter:      "class {$this->className($filePath)} extends Controller {\n    public function __construct(private {$this->className($filePath, 'Service')} \$service) {}\n    public function store(StoreRequest \$request) {\n        return \$this->service->create(\$request->validated());\n    }\n}",
+            recommendation: "Create {$serviceName} and move business logic there. Inject it via constructor.",
+            codeBefore:     "class {$className} extends Controller {\n    public function store(Request \$request) {\n        // 50+ lines of business logic\n    }\n}",
+            codeAfter:      "class {$className} extends Controller {\n    public function __construct(private {$serviceName} \$service) {}\n    public function store(StoreRequest \$request) {\n        return \$this->service->create(\$request->validated());\n    }\n}",
         ));
     }
 
+    /**
+     * Detect direct Eloquent / DB calls in a controller that has NO service injection.
+     *
+     * Previously this checked a hardcoded list of 6 model names.
+     * Now it detects ANY capitalized class followed by Eloquent static methods,
+     * covering all project-specific models.
+     */
     private function checkControllerDirectDbAccess(string $filePath, string $content): void
     {
-        // Look for Eloquent queries directly in controller (not via service/repository)
-        $dbPatterns = [
-            '/\b(User|Order|Product|Invoice|Payment|Customer)\s*::\s*(where|find|create|update|delete|first|get|all)\b/',
-            '/->save\(\)/',
-            '/->delete\(\)/',
-            '/DB::/',
-        ];
+        // Any PascalCase class using common Eloquent static methods
+        $eloquentCallPattern = '/\b[A-Z][a-zA-Z]+\s*::\s*(where|find|findOrFail|create|updateOrCreate|firstOrCreate|delete|first|get|all|count|paginate|with)\b/';
 
-        $found = false;
-        foreach ($dbPatterns as $pattern) {
-            if (preg_match($pattern, $content)) {
-                $found = true;
-                break;
-            }
-        }
+        // Raw DB:: usage
+        $rawDbPattern = '/\bDB\s*::/';
 
-        if (! $found) {
+        // Direct model mutations
+        $mutationPattern = '/->(save|delete|update|fill)\s*\(/';
+
+        $hasEloquent  = (bool) preg_match($eloquentCallPattern, $content);
+        $hasRawDb     = (bool) preg_match($rawDbPattern, $content);
+        $hasMutations = (bool) preg_match($mutationPattern, $content);
+
+        if (! $hasEloquent && ! $hasRawDb && ! $hasMutations) {
             return;
         }
 
-        // Check if constructor has service injection — if yes, less severe
-        $hasServiceInjection = preg_match('/private\s+\w+Service\s+\$/', $content) ||
-                               preg_match('/private\s+\w+Repository\s+\$/', $content);
-
+        // If the controller already has service/repository injection it's probably fine
+        $hasServiceInjection = (bool) preg_match('/private\s+\w+(Service|Repository)\s+\$/', $content);
         if ($hasServiceInjection) {
-            return; // Has service layer, probably OK
+            return;
         }
 
         $this->addResult(AnalysisResult::make(
             category:       'service_layer',
-            severity:       'high',
-            title:          'Controller directly accesses database without Service layer',
-            description:    "Controller {$this->className($filePath)} queries the database directly. This violates Single Responsibility and makes testing hard.",
+            severity:       Severity::HIGH,
+            title:          'Controller directly accesses database without a Service layer',
+            description:    "Controller {$this->className($filePath)} queries the database directly. This violates Single Responsibility and makes unit testing impossible without a real database.",
             file:           $filePath,
-            recommendation: 'Create a Service class for business logic. Inject it in the controller constructor.',
-            codeBefore:     "public function store(Request \$request) {\n    \$user = User::create(\$request->all());\n    // more direct DB calls...\n}",
+            recommendation: 'Create a Service class for all business/data logic. Inject it in the controller constructor.',
+            codeBefore:     "public function store(Request \$request) {\n    \$user = User::create(\$request->all());\n}",
             codeAfter:      "public function store(StoreUserRequest \$request) {\n    \$user = \$this->userService->create(\$request->validated());\n    return UserResource::make(\$user);\n}",
         ));
     }
 
     private function checkMissingFormRequest(string $filePath, string $content): void
     {
-        // Check if controller uses Request directly instead of FormRequest for validation
-        $hasDirectValidate = preg_match('/\$request->validate\s*\(/', $content);
-        $hasFormRequest    = preg_match('/use\s+App\\\\Http\\\\Requests\\\\/', $content) ||
-                             preg_match('/use\s+Modules\\\\.*\\\\Requests\\\\/', $content);
+        $hasDirectValidate = (bool) preg_match('/\$request->validate\s*\(/', $content);
+        $hasFormRequest    = (bool) preg_match(
+            '/use\s+(App|Modules)\\\\.*Requests\\\\/',
+            $content
+        );
 
         if ($hasDirectValidate && ! $hasFormRequest) {
             $this->addResult(AnalysisResult::make(
                 category:       'solid',
-                severity:       'low',
+                severity:       Severity::LOW,
                 title:          'Inline validation in controller — use FormRequest',
-                description:    "Controller {$this->className($filePath)} uses \$request->validate() inline. Extract to a dedicated FormRequest class for reusability and cleaner controllers.",
+                description:    "Controller {$this->className($filePath)} uses \$request->validate() inline. Extract to a dedicated FormRequest for reusability and cleaner controllers.",
                 file:           $filePath,
-                recommendation: 'Create a FormRequest class (php artisan make:request) and move validation rules there.',
-                codeBefore:     "public function store(Request \$request) {\n    \$request->validate(['name' => 'required', ...]);\n}",
+                recommendation: 'Run: php artisan make:request Store' . $this->className($filePath, '') . 'Request',
+                codeBefore:     "public function store(Request \$request) {\n    \$request->validate(['name' => 'required']);\n}",
                 codeAfter:      "public function store(StoreUserRequest \$request) {\n    // Validation is in StoreUserRequest::rules()\n}",
             ));
         }
     }
 
+    private function reportFatModel(string $filePath, string $content, int $lines): void
+    {
+        $className = $this->className($filePath);
+
+        $this->addResult(AnalysisResult::make(
+            category:       'fat_model',
+            severity:       Severity::MEDIUM,
+            title:          "Fat Model: {$className} ({$lines} lines)",
+            description:    "Model has {$lines} lines. Models should contain only relationships, scopes, casts, and accessors. Business logic belongs in a Service.",
+            file:           $filePath,
+            lineStart:      1,
+            lineEnd:        $lines,
+            recommendation: "Extract business logic to {$className}Service. Keep the model lean.",
+            codeBefore:     "class {$className} extends Model { // {$lines} lines of mixed logic }",
+            codeAfter:      "class {$className} extends Model { // Only relationships, casts, scopes }\nclass {$className}Service { // Business logic here }",
+        ));
+    }
+
+    /**
+     * Detect overly long methods.
+     * Uses BaseAnalyzer::extractMethods() — no code duplication.
+     */
     private function checkLongMethods(string $filePath, string $content): void
     {
-        // Find methods and measure their length
-        preg_match_all(
-            '/(?:public|private|protected)\s+function\s+(\w+)\s*\([^)]*\)\s*(?::\s*\S+)?\s*\{/m',
-            $content,
-            $matches,
-            PREG_OFFSET_CAPTURE
-        );
-
-        $contentLines = explode("\n", $content);
-        $totalLines   = count($contentLines);
-
-        foreach ($matches[1] as $i => $methodMatch) {
-            $methodName   = $methodMatch[0];
-            $methodOffset = $matches[0][$i][1];
-            $methodLine   = substr_count(substr($content, 0, $methodOffset), "\n") + 1;
-
-            // Walk forward from method start to find closing brace at depth 0
-            $depth     = 0;
-            $endLine   = $methodLine;
-            $started   = false;
-            for ($ln = $methodLine - 1; $ln < $totalLines && $ln < $methodLine + 300; $ln++) {
-                $l = $contentLines[$ln];
-                $depth += substr_count($l, '{') - substr_count($l, '}');
-                if (! $started && $depth > 0) {
-                    $started = true;
-                }
-                if ($started && $depth <= 0) {
-                    $endLine = $ln + 1;
-                    break;
-                }
-            }
-
-            $bodyLines  = max(0, $endLine - $methodLine);
-            $methodBody = implode("\n", array_slice($contentLines, $methodLine - 1, $bodyLines + 1));
-
-            if ($bodyLines < self::LONG_METHOD_LINE_THRESHOLD) {
+        foreach ($this->extractMethods($content) as $method) {
+            if ($method['body_lines'] < self::LONG_METHOD_LINE_THRESHOLD) {
                 continue;
             }
 
-            $complexity = $this->cyclomaticComplexity($methodBody);
-            $severity   = $complexity > 15 ? 'high' : ($bodyLines > 80 ? 'high' : 'medium');
+            $complexity = $this->cyclomaticComplexity($method['body']);
+            $severity   = ($complexity > 15 || $method['body_lines'] > 80)
+                ? Severity::HIGH
+                : Severity::MEDIUM;
 
             $this->addResult(AnalysisResult::make(
                 category:       'solid',
                 severity:       $severity,
-                title:          "Long method: {$this->className($filePath)}::{$methodName}() (~{$bodyLines} lines, complexity: {$complexity})",
-                description:    "Method '{$methodName}' is ~{$bodyLines} lines with cyclomatic complexity of {$complexity}. Long methods are hard to test, understand, and maintain.",
+                title:          "Long method: {$this->className($filePath)}::{$method['name']}() (~{$method['body_lines']} lines, complexity: {$complexity})",
+                description:    "Method '{$method['name']}' is ~{$method['body_lines']} lines with cyclomatic complexity {$complexity}. Long methods are hard to test, understand, and maintain.",
                 file:           $filePath,
-                lineStart:      $methodLine,
-                lineEnd:        $methodLine + $bodyLines,
-                recommendation: "Break '{$methodName}' into smaller private methods, each doing one thing. Aim for methods under 20 lines.",
+                lineStart:      $method['start_line'],
+                lineEnd:        $method['end_line'],
+                recommendation: "Break '{$method['name']}' into smaller private methods, each doing one thing. Aim for < 20 lines per method.",
             ));
         }
     }
 
     private function checkStaticFacadeOveruse(string $filePath, string $content): void
     {
-        // Count static facade calls like Cache::, Log::, Mail::, Event::
-        $facadePattern = '/\b(Cache|Log|Mail|Event|Bus|Queue|Storage|Http)\s*::/';
-        $count         = preg_match_all($facadePattern, $content);
+        $count = preg_match_all('/\b(Cache|Log|Mail|Event|Bus|Queue|Storage|Http)\s*::/', $content);
 
-        if ($count < 5) {
+        if ($count < self::FACADE_USAGE_THRESHOLD) {
             return;
         }
 
         $this->addResult(AnalysisResult::make(
             category:       'dependency_injection',
-            severity:       'low',
+            severity:       Severity::LOW,
             title:          "Heavy static facade usage in {$this->className($filePath)} ({$count} calls)",
-            description:    "File uses {$count} static facade calls. While facades are convenient, heavy use makes testing harder. Prefer constructor injection.",
+            description:    "File uses {$count} static facade calls. Heavy static usage makes unit testing harder because facades cannot be easily mocked via constructor injection.",
             file:           $filePath,
-            recommendation: 'Inject dependencies via constructor instead of using static facades for testability.',
-            codeBefore:     "public function send() {\n    Cache::put(...);\n    Mail::send(...);\n    Log::info(...);\n}",
-            codeAfter:      "public function __construct(\n    private Cache \$cache,\n    private Mailer \$mailer,\n    private LoggerInterface \$logger\n) {}\npublic function send() {\n    \$this->cache->put(...);\n}",
+            recommendation: 'Inject dependencies via constructor (Cache, Mailer, LoggerInterface) for full testability.',
+            codeBefore:     "public function send() {\n    Cache::put(...);\n    Mail::send(...);\n}",
+            codeAfter:      "public function __construct(\n    private CacheInterface \$cache,\n    private Mailer \$mailer,\n) {}\npublic function send() {\n    \$this->cache->put(...);\n}",
         ));
     }
 
-    private function calculateScore(array $findings): int
-    {
-        $score    = 100;
-        $weights  = ['critical' => 20, 'high' => 10, 'medium' => 5, 'low' => 2];
-
-        foreach ($findings as $f) {
-            $score -= $weights[$f['severity']] ?? 0;
-        }
-
-        return max(0, min(100, $score));
-    }
-
-    private function buildSummary(array $findings): array
-    {
-        $counts = ['critical' => 0, 'high' => 0, 'medium' => 0, 'low' => 0];
-        foreach ($findings as $f) {
-            $counts[$f['severity']] = ($counts[$f['severity']] ?? 0) + 1;
-        }
-        return array_merge(['total_issues' => count($findings)], $counts);
-    }
+    // ──────────────────────────────────────────────────────────────────────────
+    // Helpers
+    // ──────────────────────────────────────────────────────────────────────────
 
     private function className(string $filePath, string $suffix = ''): string
     {
         $name = basename($filePath, '.php');
-        return $suffix ? str_replace('Controller', '', $name) . $suffix : $name;
+        return $suffix !== ''
+            ? str_replace('Controller', '', $name) . $suffix
+            : $name;
     }
 }
