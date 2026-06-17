@@ -117,23 +117,36 @@ class PerformanceAnalyzer extends BaseAnalyzer
 
     private function checkSelectAll(string $filePath, string $content): void
     {
+        // Only flag ::all() in controllers and services — migrations, seeders,
+        // factories, tests, and routes legitimately use ::all() without issue.
+        $skip = ['migration', 'seeder', 'factory', 'test', 'Test', 'seed', 'Seed',
+                 'database/', 'routes/', 'config/', 'lang/'];
+        foreach ($skip as $s) {
+            if (str_contains($filePath, $s)) {
+                return;
+            }
+        }
+
+        if (! $this->isController($filePath) && ! $this->isService($filePath)) {
+            return;
+        }
+
         $lines = explode("\n", $content);
 
         foreach ($lines as $lineNum => $line) {
-            // ::all() in a controller or service
             if (preg_match('/\b\w+::all\s*\(\s*\)/', $line) && ! str_contains($line, '//')) {
                 $this->addResult(AnalysisResult::make(
                     category:       'select_all',
                     severity:       'medium',
                     title:          'Model::all() fetches every record without pagination',
-                    description:    "Line " . ($lineNum + 1) . ": Using ::all() fetches every record from the database. For large datasets this will exhaust memory and slow the application.",
+                    description:    "Line " . ($lineNum + 1) . ": Using ::all() fetches every record. For large datasets this exhausts memory and slows the application.",
                     file:           $filePath,
                     lineStart:      $lineNum + 1,
                     lineEnd:        $lineNum + 1,
                     codeSnippet:    trim($line),
-                    recommendation: 'Use pagination with ->paginate(25) or limit with ->take(100)->get().',
+                    recommendation: 'Use ->paginate(25) or ->take(100)->get().',
                     codeBefore:     'User::all()',
-                    codeAfter:      'User::paginate(25)  // or User::latest()->take(100)->get()',
+                    codeAfter:      'User::paginate(25)',
                 ));
             }
         }
@@ -200,6 +213,11 @@ class PerformanceAnalyzer extends BaseAnalyzer
 
     private function checkMissingDatabaseIndexHints(string $filePath, string $content): void
     {
+        // Only check in application code, not migrations themselves
+        if (str_contains($filePath, 'migration') || str_contains($filePath, 'database/')) {
+            return;
+        }
+
         $lines = explode("\n", $content);
 
         foreach ($lines as $lineNum => $line) {

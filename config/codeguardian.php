@@ -71,6 +71,10 @@ return [
         // Maximum file size to include in context (bytes)
         'max_file_size' => 100_000,
 
+        // Warn (and ask to confirm) if scan finds more files than this.
+        // Set to 0 to disable the warning.
+        'max_files_per_scan' => 2000,
+
         // Directories to skip during scanning
         'skip_dirs' => [
             'vendor', 'node_modules', '.git', 'storage', 'bootstrap/cache',

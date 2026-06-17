@@ -69,6 +69,18 @@ class AnalyzeCommand extends Command
         $totalFiles = $context['summary']['total_files'];
         $totalLines = $context['summary']['total_lines'];
         $this->info("  ✔  Found {$totalFiles} files ({$totalLines} lines)");
+
+        // Warn on large codebases and offer to continue
+        $maxFiles = (int) config('codeguardian.analysis.max_files_per_scan', 2000);
+        if ($totalFiles > $maxFiles) {
+            $this->warn("  ⚠  Large codebase detected ({$totalFiles} files). Analysis may take a few minutes.");
+            $this->warn("     Tip: use --path=app/Http/Controllers to scan a specific directory,");
+            $this->warn("          or --module=YourModule to scan one module at a time.");
+            if ($this->input->isInteractive() && ! $this->confirm("  Continue scanning all {$totalFiles} files?", true)) {
+                $this->info('  Cancelled. Re-run with --path= to narrow the scope.');
+                return self::SUCCESS;
+            }
+        }
         $this->newLine();
 
         // Run analysis
@@ -139,13 +151,13 @@ class AnalyzeCommand extends Command
             $this->line("  Running {$name} analyzer...");
         }
 
-        $result = $orchestrator->analyze($files, $options);
+        $result = $orchestrator->analyze($files, $options, $path ?? base_path());
 
         // Normalize to format expected by formatter
-        return $this->normalizeStaticResult($result);
+        return $this->normalizeStaticResult($result, $path ?? base_path());
     }
 
-    private function normalizeStaticResult(array $raw): array
+    private function normalizeStaticResult(array $raw, string $scanPath = ''): array
     {
         // Build agent_results from individual agent data
         $agentResults = [];
@@ -153,18 +165,18 @@ class AnalyzeCommand extends Command
             $agentResults[$agentData['agent']] = $agentData;
         }
 
-        // Build scores map
+        // Build scores map — iterate keys directly to avoid array_keys/array_filter index confusion
         $scores = [];
         foreach ($raw['agents'] as $agentData) {
-            $scoreKey = array_keys(array_filter(
-                array_keys($agentData),
-                fn($k) => str_ends_with($k, '_score')
-            ));
-            if (! empty($scoreKey)) {
-                $sk            = $scoreKey[0];
-                $scores[$sk]   = $agentData[$sk];
+            foreach (array_keys($agentData) as $k) {
+                if (str_ends_with($k, '_score')) {
+                    $scores[$k] = $agentData[$k];
+                    break;
+                }
             }
         }
+
+        $bySeverity = $raw['summary']['by_severity'] ?? ['critical' => 0, 'high' => 0, 'medium' => 0, 'low' => 0];
 
         return [
             'files_scanned'  => $raw['files_scanned'],
@@ -174,16 +186,19 @@ class AnalyzeCommand extends Command
             'scores'         => $scores,
             'agent_results'  => $agentResults,
             'all_findings'   => $raw['all_findings'],
-            'summary'        => [
-                'total_issues' => $raw['summary']['total_issues'],
-                'critical'     => $raw['summary']['by_severity']['critical'],
-                'high'         => $raw['summary']['by_severity']['high'],
-                'medium'       => $raw['summary']['by_severity']['medium'],
-                'low'          => $raw['summary']['by_severity']['low'],
-                'top_findings' => $raw['summary']['top_findings'],
-                'hotspot_files' => $raw['summary']['hotspot_files'],
-            ],
+            'project_name'   => basename($scanPath ?: ($raw['scan_path'] ?? base_path())),
+            'project_type'   => 'laravel',
+            'scanned_at'     => now()->toISOString(),
             'engine'         => 'static',
+            'summary'        => [
+                'total_issues'  => $raw['summary']['total_issues'],
+                'critical'      => $bySeverity['critical'] ?? 0,
+                'high'          => $bySeverity['high']     ?? 0,
+                'medium'        => $bySeverity['medium']   ?? 0,
+                'low'           => $bySeverity['low']      ?? 0,
+                'top_findings'  => $raw['summary']['top_findings']  ?? [],
+                'hotspot_files' => $raw['summary']['hotspot_files'] ?? [],
+            ],
         ];
     }
 

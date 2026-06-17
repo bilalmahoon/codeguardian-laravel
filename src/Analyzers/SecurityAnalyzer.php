@@ -220,19 +220,28 @@ class SecurityAnalyzer extends BaseAnalyzer
 
     private function checkDebugCodeLeft(string $filePath, string $content): void
     {
+        // Skip test files — dd() / dump() are expected there
+        if (str_contains($filePath, 'test') || str_contains($filePath, 'Test') ||
+            str_contains($filePath, 'spec') || str_contains($filePath, 'Spec')) {
+            return;
+        }
+
         $debugPatterns = [
-            '/\bdd\s*\(/'     => 'dd() debug dump left in code',
-            '/\bdump\s*\(/'   => 'dump() debug output left in code',
+            '/\bdd\s*\(/'       => 'dd() debug dump left in code',
+            '/\bdump\s*\(/'     => 'dump() debug output left in code',
             '/\bvar_dump\s*\(/' => 'var_dump() left in code',
-            '/\bprint_r\s*\(/' => 'print_r() left in code',
-            '/\bdie\s*\(/'    => 'die() left in code',
-            '/\bexit\s*\(/'   => 'exit() left in code',
+            '/\bprint_r\s*\(/'  => 'print_r() left in code',
         ];
 
-        $lines = explode("\n", $content);
+        $lines   = explode("\n", $content);
+        $found   = 0;
+        $maxPerFile = 3; // Cap to avoid flooding
+
         foreach ($lines as $lineNum => $line) {
+            if ($found >= $maxPerFile) break;
+
             $trimmed = trim($line);
-            if (str_starts_with($trimmed, '//') || str_starts_with($trimmed, '#')) {
+            if (str_starts_with($trimmed, '//') || str_starts_with($trimmed, '#') || str_starts_with($trimmed, '*')) {
                 continue;
             }
 
@@ -242,13 +251,14 @@ class SecurityAnalyzer extends BaseAnalyzer
                         category:       'debug_code',
                         severity:       'medium',
                         title:          "Debug code left in production: {$message}",
-                        description:    "Line " . ($lineNum + 1) . ": {$message}. This should not be in production code.",
+                        description:    "Line " . ($lineNum + 1) . ": {$message}. Should not be in production code.",
                         file:           $filePath,
                         lineStart:      $lineNum + 1,
                         lineEnd:        $lineNum + 1,
                         codeSnippet:    trim($line),
                         recommendation: 'Remove debug statements before committing. Use Log::debug() for logging.',
                     ));
+                    $found++;
                     break;
                 }
             }

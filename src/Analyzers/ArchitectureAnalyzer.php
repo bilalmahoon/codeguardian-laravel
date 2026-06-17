@@ -167,14 +167,32 @@ class ArchitectureAnalyzer extends BaseAnalyzer
             PREG_OFFSET_CAPTURE
         );
 
+        $contentLines = explode("\n", $content);
+        $totalLines   = count($contentLines);
+
         foreach ($matches[1] as $i => $methodMatch) {
             $methodName   = $methodMatch[0];
             $methodOffset = $matches[0][$i][1];
             $methodLine   = substr_count(substr($content, 0, $methodOffset), "\n") + 1;
 
-            // Extract method body roughly
-            $methodBody = substr($content, $methodOffset, 2000);
-            $bodyLines  = min(substr_count($methodBody, "\n"), $this->lineCount($content) - $methodLine);
+            // Walk forward from method start to find closing brace at depth 0
+            $depth     = 0;
+            $endLine   = $methodLine;
+            $started   = false;
+            for ($ln = $methodLine - 1; $ln < $totalLines && $ln < $methodLine + 300; $ln++) {
+                $l = $contentLines[$ln];
+                $depth += substr_count($l, '{') - substr_count($l, '}');
+                if (! $started && $depth > 0) {
+                    $started = true;
+                }
+                if ($started && $depth <= 0) {
+                    $endLine = $ln + 1;
+                    break;
+                }
+            }
+
+            $bodyLines  = max(0, $endLine - $methodLine);
+            $methodBody = implode("\n", array_slice($contentLines, $methodLine - 1, $bodyLines + 1));
 
             if ($bodyLines < self::LONG_METHOD_LINE_THRESHOLD) {
                 continue;

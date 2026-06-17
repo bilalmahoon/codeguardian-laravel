@@ -40,7 +40,7 @@ class StaticOrchestrator
      *   summary: array
      * }
      */
-    public function analyze(array $files, array $options = []): array
+    public function analyze(array $files, array $options = [], string $scanPath = ''): array
     {
         $runArchitecture = $options['architecture'] ?? true;
         $runSecurity     = $options['security']     ?? true;
@@ -91,6 +91,7 @@ class StaticOrchestrator
             'agents'         => $agentResults,
             'all_findings'   => $allFindings,
             'summary'        => $summary,
+            'scan_path'      => $scanPath,
         ];
     }
 
@@ -262,12 +263,13 @@ class StaticOrchestrator
 
         $scores = [];
         foreach ($agentResults as $result) {
-            $key = array_key_first(array_filter(
-                array_keys($result),
-                fn($k) => str_ends_with($k, '_score')
-            ));
-            if ($key && isset($result[$key])) {
-                $scores[] = $result[$key];
+            // Iterate keys directly — array_key_first(array_filter(...)) returns
+            // a numeric offset, not the string key name, so we avoid that pattern.
+            foreach (array_keys($result) as $k) {
+                if (str_ends_with($k, '_score')) {
+                    $scores[] = $result[$k];
+                    break;
+                }
             }
         }
 
@@ -301,18 +303,23 @@ class StaticOrchestrator
         arsort($byCategory);
         arsort($byFile);
 
+        // Sort all findings by severity so top-5 are the most critical
+        $severityOrder = ['critical' => 0, 'high' => 1, 'medium' => 2, 'low' => 3];
+        usort($allFindings, fn($a, $b) =>
+            ($severityOrder[$a['severity']] ?? 4) <=> ($severityOrder[$b['severity']] ?? 4)
+        );
         $topIssues = array_slice($allFindings, 0, 5);
 
         return [
-            'total_issues'  => count($allFindings),
-            'by_severity'   => $bySeverity,
+            'total_issues'   => count($allFindings),
+            'by_severity'    => $bySeverity,
             'top_categories' => array_slice($byCategory, 0, 5, true),
-            'hotspot_files' => array_slice($byFile, 0, 5, true),
-            'top_findings'  => array_map(fn($f) => [
-                'severity'    => $f['severity'],
-                'category'    => $f['category'],
-                'title'       => $f['title'],
-                'file'        => basename($f['file']),
+            'hotspot_files'  => array_slice($byFile, 0, 5, true),
+            'top_findings'   => array_map(fn($f) => [
+                'severity' => $f['severity'],
+                'category' => $f['category'],
+                'title'    => $f['title'],
+                'file'     => basename($f['file'] ?? ''),
             ], $topIssues),
         ];
     }

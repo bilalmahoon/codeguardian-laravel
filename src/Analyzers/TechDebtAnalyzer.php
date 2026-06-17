@@ -13,10 +13,14 @@ class TechDebtAnalyzer extends BaseAnalyzer
 
     public function analyze(array $files): array
     {
+        // Pre-build a global block-hash index once — O(n) — so per-file
+        // duplication checks don't need to re-scan all files themselves.
+        $globalBlockHashes = $this->buildBlockHashIndex($files);
+
         foreach ($files as $filePath => $content) {
             $this->checkLargeClass($filePath, $content);
             $this->checkComplexMethods($filePath, $content);
-            $this->checkDuplicatedCode($filePath, $content, $files);
+            $this->checkDuplicatedCode($filePath, $content, $globalBlockHashes);
             $this->checkTodoFixme($filePath, $content);
             $this->checkDeadCode($filePath, $content);
             $this->checkMissingReturnTypes($filePath, $content);
@@ -80,17 +84,26 @@ class TechDebtAnalyzer extends BaseAnalyzer
             PREG_OFFSET_CAPTURE
         );
 
+        $contentLines = explode("\n", $content);
+        $totalLines   = count($contentLines);
+
         foreach ($matches[1] as $i => $methodMatch) {
             $methodName   = $methodMatch[0];
             $methodOffset = $matches[0][$i][1];
             $methodLine   = substr_count(substr($content, 0, $methodOffset), "\n") + 1;
 
-            // Extract ~3000 chars of method body
-            $bodyStart  = strpos($content, '{', $methodOffset);
-            $methodBody = $bodyStart !== false
-                ? substr($content, $bodyStart, 3000)
-                : '';
+            // Walk forward to find actual method end
+            $depth   = 0;
+            $endLine = $methodLine;
+            $started = false;
+            for ($ln = $methodLine - 1; $ln < $totalLines && $ln < $methodLine + 300; $ln++) {
+                $l = $contentLines[$ln];
+                $depth += substr_count($l, '{') - substr_count($l, '}');
+                if (! $started && $depth > 0) $started = true;
+                if ($started && $depth <= 0) { $endLine = $ln + 1; break; }
+            }
 
+            $methodBody = implode("\n", array_slice($contentLines, $methodLine - 1, $endLine - $methodLine + 1));
             $complexity = $this->cyclomaticComplexity($methodBody);
 
             if ($complexity >= 10) {
@@ -108,57 +121,76 @@ class TechDebtAnalyzer extends BaseAnalyzer
         }
     }
 
-    private function checkDuplicatedCode(string $filePath, string $content, array $allFiles): void
+    /**
+     * Build a map of { md5(block) => firstSeenFilePath } for all files.
+     * Called once before the main loop so per-file checks are O(1) lookups.
+     */
+    private function buildBlockHashIndex(array $files): array
     {
-        // Simple duplication: look for identical blocks of 5+ lines in different files
-        $lines = array_map('trim', explode("\n", $content));
-        $lines = array_filter($lines, fn($l) => strlen($l) > 20 && ! str_starts_with($l, '//') && ! str_starts_with($l, '*'));
-        $lines = array_values($lines);
-
-        if (count($lines) < 10) {
-            return;
-        }
-
-        // Build 5-line fingerprints from this file
         $blockSize = 5;
-        $blocks    = [];
-        for ($i = 0; $i <= count($lines) - $blockSize; $i++) {
-            $block        = implode("\n", array_slice($lines, $i, $blockSize));
-            $hash         = md5($block);
-            $blocks[$hash] = $block;
-        }
+        $index     = []; // hash => first file path that contained it
 
-        // Check against other files (limit search to avoid O(n^2) slowness)
-        $checkedFiles = 0;
-        foreach ($allFiles as $otherPath => $otherContent) {
-            if ($otherPath === $filePath || $checkedFiles > 20) {
-                break;
+        foreach ($files as $filePath => $content) {
+            $lines = $this->meaningfulLines($content);
+            if (count($lines) < $blockSize) {
+                continue;
             }
-            $checkedFiles++;
-
-            $otherLines = array_map('trim', explode("\n", $otherContent));
-            $otherLines = array_filter($otherLines, fn($l) => strlen($l) > 20 && ! str_starts_with($l, '//'));
-            $otherLines = array_values($otherLines);
-
-            for ($i = 0; $i <= count($otherLines) - $blockSize; $i++) {
-                $block = implode("\n", array_slice($otherLines, $i, $blockSize));
-                $hash  = md5($block);
-
-                if (isset($blocks[$hash])) {
-                    $this->addResult(AnalysisResult::make(
-                        category:       'duplication',
-                        severity:       'medium',
-                        title:          'Duplicated code block detected',
-                        description:    "Identical code block (~{$blockSize} lines) found in both:\n- {$filePath}\n- {$otherPath}\n\nDuplicated code increases maintenance cost — a bug fix must be applied in multiple places.",
-                        file:           $filePath,
-                        recommendation: 'Extract the duplicated logic into a shared Service, Trait, or Base class.',
-                        codeSnippet:    $block,
-                    ));
-                    unset($blocks[$hash]); // Don't report same duplication twice
-                    break 2;
+            for ($i = 0; $i <= count($lines) - $blockSize; $i++) {
+                $hash = md5(implode("\n", array_slice($lines, $i, $blockSize)));
+                if (! isset($index[$hash])) {
+                    $index[$hash] = $filePath;
                 }
             }
         }
+
+        return $index;
+    }
+
+    /**
+     * O(n) per file — looks up hashes in the pre-built index.
+     */
+    private function checkDuplicatedCode(string $filePath, string $content, array $globalIndex): void
+    {
+        $blockSize = 5;
+        $lines     = $this->meaningfulLines($content);
+
+        if (count($lines) < $blockSize) {
+            return;
+        }
+
+        $reported = false;
+        for ($i = 0; $i <= count($lines) - $blockSize; $i++) {
+            $block = implode("\n", array_slice($lines, $i, $blockSize));
+            $hash  = md5($block);
+
+            if (isset($globalIndex[$hash]) && $globalIndex[$hash] !== $filePath) {
+                $otherFile = $globalIndex[$hash];
+                $this->addResult(AnalysisResult::make(
+                    category:       'duplication',
+                    severity:       'medium',
+                    title:          'Duplicated code block detected',
+                    description:    "Identical code block (~{$blockSize} lines) found in:\n- " . basename($filePath) . "\n- " . basename($otherFile) . "\n\nDuplicated code means bug fixes must be applied in multiple places.",
+                    file:           $filePath,
+                    recommendation: 'Extract the duplicated logic into a shared Service, Trait, or Base class.',
+                    codeSnippet:    $block,
+                ));
+                $reported = true;
+                break; // One duplication report per file is enough
+            }
+        }
+    }
+
+    /** Return only meaningful lines (non-empty, non-comment, long enough). */
+    private function meaningfulLines(string $content): array
+    {
+        $lines = array_map('trim', explode("\n", $content));
+        return array_values(array_filter(
+            $lines,
+            fn($l) => strlen($l) > 20
+                   && ! str_starts_with($l, '//')
+                   && ! str_starts_with($l, '*')
+                   && ! str_starts_with($l, '#')
+        ));
     }
 
     private function checkTodoFixme(string $filePath, string $content): void
@@ -249,6 +281,12 @@ class TechDebtAnalyzer extends BaseAnalyzer
 
     private function checkMagicNumbers(string $filePath, string $content): void
     {
+        // Skip migrations, config, routes, lang — magic numbers are expected there
+        $skipPaths = ['migration', 'config/', 'routes/', 'lang/', 'database/', 'seeder', 'factory'];
+        foreach ($skipPaths as $s) {
+            if (str_contains($filePath, $s)) return;
+        }
+
         $lines  = explode("\n", $content);
         $magic  = [];
 
@@ -258,21 +296,23 @@ class TechDebtAnalyzer extends BaseAnalyzer
                 continue;
             }
 
-            // Find numeric literals > 1 that aren't in array/migration/config context
+            // Find numeric literals that look "unexplained"
             if (preg_match_all('/(?<!["\'\w\->])(?<!\$)\b([2-9][0-9]{1,4})\b(?!\s*\.)/', $line, $m)) {
                 foreach ($m[1] as $num) {
-                    // Skip common safe numbers (HTTP codes, timeouts)
-                    if (in_array((int)$num, [200, 201, 204, 400, 401, 403, 404, 422, 500, 60, 24, 100, 1000])) {
+                    $n = (int) $num;
+                    // Skip well-known safe numbers
+                    if (in_array($n, [200, 201, 204, 302, 400, 401, 403, 404, 422, 429, 500,
+                                      503, 60, 24, 30, 90, 100, 128, 255, 1000, 1024, 3600])) {
                         continue;
                     }
                     $magic[] = ['line' => $lineNum + 1, 'number' => $num, 'context' => $trimmed];
-                    break;
+                    break; // one per line
                 }
             }
         }
 
-        if (count($magic) < 3) {
-            return;
+        if (count($magic) < 4) {
+            return; // Raise threshold — less noise
         }
 
         $sample = array_slice($magic, 0, 3);
