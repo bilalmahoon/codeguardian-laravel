@@ -49,6 +49,13 @@ class RefactorCommand extends Command
     /** @var array<string,string> Rollback map: [ relativeFilePath => originalContent ] */
     private array $backups = [];
 
+    /**
+     * @var string[] Test names that were ALREADY failing at baseline (before any refactoring).
+     * After each refactor step we only alert on failures NOT in this set, so pre-existing
+     * broken tests never block the workflow.
+     */
+    private array $baselineFailingTests = [];
+
     /** @var StaticOrchestrator  Single instance shared across all workflow steps */
     private StaticOrchestrator $orchestrator;
 
@@ -124,14 +131,16 @@ class RefactorCommand extends Command
             $baselineResult = $this->runTests(cgOnly: false);
             $this->printTestResult('Baseline', $baselineResult);
 
-            if (! ($baselineResult['passed'] ?? true) && ! ($baselineResult['skipped'] ?? false)) {
-                $this->warn('  ⚠  Existing tests are already failing before refactoring.');
-                $this->warn('  Fix these first, or use --skip-existing-tests to skip the pre-existing failures.');
-                if ($this->interactiveMode) {
-                    if (! $this->confirm('  Continue anyway?', false)) {
-                        return self::FAILURE;
-                    }
-                }
+            // Record every test that is ALREADY failing before we touch anything.
+            // Per-file and final checks will only alert on NEW failures that
+            // weren't in this set — pre-existing broken tests never block us.
+            $this->baselineFailingTests = $this->extractFailingTestNames($baselineResult);
+
+            if (! empty($this->baselineFailingTests)) {
+                $count = count($this->baselineFailingTests);
+                $this->warn("  ⚠  {$count} test(s) were already failing before refactoring — recorded as baseline.");
+                $this->warn('  These will be ignored during the refactoring checks.');
+                $this->warn('  Use --skip-existing-tests to skip project tests entirely.');
             }
         }
 
@@ -146,6 +155,24 @@ class RefactorCommand extends Command
             $this->line('  Running full test suite (CodeGuardian stubs + project existing tests)...');
             $finalTestResult = $this->runTests(cgOnly: false);
             $this->printTestResult('Post-Refactor', $finalTestResult);
+
+            // Surface only new failures in the final summary
+            $finalNewFailures = $this->filterNewFailures($finalTestResult);
+            if (! empty($finalNewFailures)) {
+                $this->newLine();
+                $this->error('  🚨 NEW test failures introduced by refactoring:');
+                foreach ($finalNewFailures as $f) {
+                    $this->warn("     • {$f['test']}");
+                }
+            } elseif (! ($finalTestResult['skipped'] ?? false)) {
+                $pre = count(array_filter(
+                    $finalTestResult['failures'] ?? [],
+                    fn($f) => in_array($f['test'] ?? '', $this->baselineFailingTests, true)
+                ));
+                if ($pre > 0) {
+                    $this->line("  ✅  No new failures. ({$pre} pre-existing failure(s) unchanged.)");
+                }
+            }
 
             if (! ($finalTestResult['passed'] ?? true)) {
                 $this->handleTestFailure();
@@ -495,18 +522,33 @@ class RefactorCommand extends Command
                     $this->printTestResult('  Existing', $existingResult);
                 }
 
-                // Combine and decide
+                // Combine and decide — but first strip pre-existing failures so
+                // we only alert on NEW breakages introduced by this refactoring.
                 $testResult = $existingResult !== null
                     ? $runner->mergeResults($cgResult, $existingResult)
                     : $cgResult;
 
-                if (! ($testResult['passed'] ?? true) && ! ($testResult['skipped'] ?? false)) {
-                    // Tell the user WHICH suite failed to make it actionable
-                    if ($existingResult !== null && ! ($existingResult['passed'] ?? true)) {
-                        $this->error("  ⚠️  BREAKING CHANGE: existing project tests failed after refactoring {$filePath}!");
-                        $this->error("  This means the refactoring changed behaviour that existing tests rely on.");
+                $newFailures = $this->filterNewFailures($testResult);
+
+                if (! empty($newFailures)) {
+                    $newCount = count($newFailures);
+
+                    // Tell the user WHICH suite the new failures came from
+                    $fromExisting = $existingResult !== null
+                        && ! empty($this->filterNewFailures($existingResult));
+
+                    if ($fromExisting) {
+                        $this->error("  ⚠️  BREAKING CHANGE detected after refactoring {$filePath}!");
+                        $this->error("  {$newCount} existing project test(s) that were passing before now fail.");
                     } else {
-                        $this->error("  ⚠️  Tests FAILED after refactoring {$filePath}!");
+                        $this->error("  ⚠️  {$newCount} test(s) FAILED after refactoring {$filePath}!");
+                    }
+
+                    foreach ($newFailures as $f) {
+                        $this->warn("     FAIL: {$f['test']}");
+                        if (! empty($f['message'])) {
+                            $this->line("           {$f['message']}");
+                        }
                     }
 
                     $choice = $this->choice(
@@ -521,6 +563,12 @@ class RefactorCommand extends Command
                     } elseif ($choice === 'Stop refactoring') {
                         $this->stopRefactoring();
                         return $refactorResults;
+                    }
+                } elseif (! ($testResult['skipped'] ?? false)) {
+                    // All failures are pre-existing — not our fault
+                    $preExisting = count($testResult['failures'] ?? []);
+                    if ($preExisting > 0) {
+                        $this->line("  ✅  No NEW failures (pre-existing: {$preExisting} ignored).");
                     }
                 }
             }
@@ -686,6 +734,41 @@ class RefactorCommand extends Command
         if ($high > 0)     $this->warn("  High         : {$high}");
         $this->newLine();
     }
+
+    // ─── Baseline-aware failure helpers ──────────────────────────────────────
+
+    /**
+     * Extract a flat list of test names from a result's failures array.
+     *
+     * @return string[]
+     */
+    private function extractFailingTestNames(array $result): array
+    {
+        return array_values(array_filter(array_map(
+            fn(array $f) => $f['test'] ?? null,
+            $result['failures'] ?? []
+        )));
+    }
+
+    /**
+     * Return only the failures that are NEW — i.e. not in the baseline set.
+     * Pre-existing failures (recorded before any refactoring) are excluded.
+     *
+     * @return array<array{test:string,message:string}>
+     */
+    private function filterNewFailures(array $result): array
+    {
+        if (empty($result['failures'])) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            $result['failures'],
+            fn(array $f) => ! in_array($f['test'] ?? '', $this->baselineFailingTests, true)
+        ));
+    }
+
+    // ─── Test output ─────────────────────────────────────────────────────────
 
     private function printTestResult(string $label, array $result): void
     {
