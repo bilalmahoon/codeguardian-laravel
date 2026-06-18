@@ -33,9 +33,9 @@ class RefactorCommand extends Command
                             {--api=               : Refactor APIs matching this filter (e.g. GET:/api/users)}
                             {--type=              : Project type: laravel or flutter}
                             {--mode=              : Execution mode: interactive (default) or auto}
-                            {--no-backup          : Skip creating backups before modifying files}
-                            {--skip-tests         : Skip test execution (not recommended)}
-                            {--skip-existing-tests : Skip running project existing tests (only run CodeGuardian stubs)}';
+                            {--no-backup            : Skip creating backups before modifying files}
+                            {--skip-tests           : Skip test execution (not recommended)}
+                            {--with-existing-tests  : Also run the project existing tests (tests/Feature, tests/Unit) to detect breaking changes}';
 
     protected $description = 'Analyze → write tests → refactor → verify tests → report (full interactive workflow)';
 
@@ -68,7 +68,11 @@ class RefactorCommand extends Command
         $this->interactiveMode      = ($this->option('mode') ?? 'interactive') === 'interactive';
         $this->backupEnabled        = ! $this->option('no-backup');
         $this->testsEnabled         = ! $this->option('skip-tests');
-        $this->existingTestsEnabled = ! $this->option('skip-existing-tests');
+        // Existing project tests are OPT-IN only — they require a properly
+        // configured local environment (DB, queues, .env.testing) and will
+        // produce false positives on machines where that isn't set up.
+        // Default: only run CodeGuardian-generated stubs (pure unit tests, no env needed).
+        $this->existingTestsEnabled = (bool) $this->option('with-existing-tests');
         $this->backups              = [];
         $this->orchestrator         = new StaticOrchestrator();
 
@@ -123,9 +127,10 @@ class RefactorCommand extends Command
 
             if ($this->existingTestsEnabled) {
                 $this->line('  Running CodeGuardian stubs + project existing tests...');
-                $this->line('  (Use --skip-existing-tests to skip project tests for speed)');
+                $this->line('  (Remove --with-existing-tests to run stubs only)');
             } else {
-                $this->line('  Running CodeGuardian test stubs...');
+                $this->line('  Running CodeGuardian test stubs only.');
+                $this->line('  Tip: add --with-existing-tests to also run tests/Feature, tests/Unit (requires local DB/env).');
             }
 
             $baselineResult = $this->runTests(cgOnly: false);
@@ -152,7 +157,10 @@ class RefactorCommand extends Command
         $finalTestResult = null;
         if ($this->testsEnabled) {
             $this->section('STEP 5/5 — FINAL TEST VERIFICATION');
-            $this->line('  Running full test suite (CodeGuardian stubs + project existing tests)...');
+            $label = $this->existingTestsEnabled
+                ? 'CodeGuardian stubs + project existing tests'
+                : 'CodeGuardian stubs';
+            $this->line("  Running {$label}...");
             $finalTestResult = $this->runTests(cgOnly: false);
             $this->printTestResult('Post-Refactor', $finalTestResult);
 
