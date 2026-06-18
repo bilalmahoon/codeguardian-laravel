@@ -35,7 +35,7 @@ class RefactorCommand extends Command
                             {--mode=              : Execution mode: interactive (default) or auto}
                             {--no-backup          : Skip creating backups before modifying files}
                             {--skip-tests         : Skip test execution (not recommended)}
-                            {--skip-existing-tests: Skip running project existing tests (only run CodeGuardian stubs)}';
+                            {--skip-existing-tests : Skip running project existing tests (only run CodeGuardian stubs)}';
 
     protected $description = 'Analyze → write tests → refactor → verify tests → report (full interactive workflow)';
 
