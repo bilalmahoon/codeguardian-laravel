@@ -21,10 +21,13 @@ class AiClient
 
     /**
      * Returns true if any AI provider key is configured in the environment.
+     *
+     * Uses the same provider default as the constructor ('openai') so that
+     * hasApiKey() and complete() agree on which key to check.
      */
     public static function hasApiKey(): bool
     {
-        $provider = config('codeguardian.provider', 'claude');
+        $provider = config('codeguardian.provider', 'openai');
 
         return match ($provider) {
             'claude'  => ! empty(config('codeguardian.claude.key')),

@@ -213,7 +213,7 @@ class StaticOrchestrator
             original:       $content,
             refactored:     $refactored,
             changes:        $changes,
-            autoFixed:      count(array_filter($changes, fn($c) => str_starts_with($c, 'Auto-fixed:'))),
+            autoFixed:      count(array_filter($changes, fn($c) => str_starts_with($c, 'Auto-fixed'))),
             manualTodos:    count(array_filter($changes, fn($c) => str_starts_with($c, '[MANUAL]'))),
             generatedFiles: $generatedFiles,
         );
@@ -254,6 +254,10 @@ class StaticOrchestrator
         /**
          * Safe-apply helper: runs $fixFn($content), validates PHP, accepts or
          * reverts. For Blade files ($isBlade=true) PHP validation is skipped.
+         *
+         * Change messages are prefixed with "[{$cat}]" so that applyManualNotes()
+         * can reliably detect which categories were already auto-fixed and skip
+         * emitting a duplicate [MANUAL] note for them.
          */
         $isBlade = str_ends_with($filePath, '.blade.php');
         $apply   = function (string $cat, callable $fixFn, string $successMsg, string $failMsg)
@@ -264,7 +268,7 @@ class StaticOrchestrator
             }
             if ($isBlade || $this->isValidPhp($candidate)) {
                 $content   = $candidate;
-                $changes[] = "Auto-fixed: {$successMsg}";
+                $changes[] = "Auto-fixed [{$cat}]: {$successMsg}";
             } else {
                 $changes[] = "[MANUAL] {$cat}: {$failMsg}";
             }
@@ -394,11 +398,12 @@ class StaticOrchestrator
      */
     private function applyManualNotes(array $singleByCategory, array $alreadyFixed = []): array
     {
-        // Build a set of categories already handled so we don't double-report
+        // Build a set of categories already handled so we don't double-report.
+        // Messages are formatted as "Auto-fixed [category]: ..." — extract the
+        // bracketed category name so we can skip emitting a duplicate [MANUAL] note.
         $handled = [];
         foreach ($alreadyFixed as $msg) {
-            // "Auto-fixed: sql_injection …" — extract category from the note
-            if (preg_match('/Auto-fixed:.*?(\w+)\s/', $msg, $m)) {
+            if (preg_match('/^Auto-fixed \[(\w+)\]/', $msg, $m)) {
                 $handled[] = strtolower($m[1]);
             }
         }
@@ -934,7 +939,8 @@ class StaticOrchestrator
             $sev = Severity::clamp($f['severity'] ?? '');
             $bySeverity[$sev]++;
 
-            $byCategory[$f['category']] = ($byCategory[$f['category']] ?? 0) + 1;
+            $cat = $f['category'] ?? 'unknown';
+            $byCategory[$cat] = ($byCategory[$cat] ?? 0) + 1;
 
             $fileKey          = basename($f['file'] ?? '');
             $byFile[$fileKey] = ($byFile[$fileKey] ?? 0) + 1;

@@ -311,6 +311,32 @@ PHP;
         $this->assertCount(1, $fatChanges, 'Duplicate categories should be de-duplicated');
     }
 
+    public function test_refactorFile_no_duplicate_manual_note_when_auto_fixed(): void
+    {
+        // Regression test: when mass_assignment is AUTO-fixed, the [MANUAL] note for
+        // mass_assignment must NOT also appear. Before the fix, $handled was always
+        // empty due to a broken regex, so both "Auto-fixed [mass_assignment]:" and
+        // "[MANUAL] mass_assignment: ..." appeared in changes — duplicate noise.
+        $content = <<<'PHP'
+<?php
+class OrderController extends Controller {
+    public function store(Request $request) {
+        Order::create($request->all());
+    }
+}
+PHP;
+        $findings = [['category' => 'mass_assignment', 'file' => 'app/Http/Controllers/OrderController.php', 'line_start' => 4]];
+        $result   = $this->orchestrator->refactorFile('app/Http/Controllers/OrderController.php', $content, $findings);
+
+        $autoChanges   = array_filter($result->changes, fn($c) => str_starts_with($c, 'Auto-fixed'));
+        $manualChanges = array_filter($result->changes, fn($c) =>
+            str_starts_with($c, '[MANUAL]') && str_contains(strtolower($c), 'mass_assignment')
+        );
+
+        $this->assertNotEmpty($autoChanges, 'mass_assignment should be auto-fixed');
+        $this->assertCount(0, $manualChanges, 'No [MANUAL] note should appear for an already auto-fixed category');
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private function makeDirtyController(): string

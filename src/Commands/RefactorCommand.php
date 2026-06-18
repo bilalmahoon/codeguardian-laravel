@@ -163,7 +163,7 @@ class RefactorCommand extends Command
                 $count = count($this->baselineFailingTests);
                 $this->warn("  ⚠  {$count} test(s) were already failing before refactoring — recorded as baseline.");
                 $this->warn('  These will be ignored during the refactoring checks.');
-                $this->warn('  Use --skip-existing-tests to skip project tests entirely.');
+                $this->warn('  Remove --with-existing-tests to skip project tests entirely.');
             }
         }
 
@@ -190,6 +190,8 @@ class RefactorCommand extends Command
                 foreach ($finalNewFailures as $f) {
                     $this->warn("     • {$f['test']}");
                 }
+                // Only prompt rollback when there are actual NEW failures from our changes
+                $this->handleTestFailure();
             } elseif (! ($finalTestResult['skipped'] ?? false)) {
                 $pre = count(array_filter(
                     $finalTestResult['failures'] ?? [],
@@ -198,10 +200,6 @@ class RefactorCommand extends Command
                 if ($pre > 0) {
                     $this->line("  ✅  No new failures. ({$pre} pre-existing failure(s) unchanged.)");
                 }
-            }
-
-            if (! ($finalTestResult['passed'] ?? true)) {
-                $this->handleTestFailure();
             }
         }
 

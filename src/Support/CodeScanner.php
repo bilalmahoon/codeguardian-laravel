@@ -80,7 +80,7 @@ class CodeScanner
         $detector = new ModuleDetector($projectRoot);
 
         if (! $detector->isModular()) {
-            throw new \RuntimeException("Project at {$projectRoot} is not module-based.");
+            throw new \InvalidArgumentException("Project at {$projectRoot} is not module-based.");
         }
 
         $modules = $detector->listModules();
