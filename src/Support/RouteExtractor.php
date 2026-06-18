@@ -121,10 +121,14 @@ class RouteExtractor
         $normFilter = $normaliseUri($filter);
 
         // Guard: str_contains(haystack, '') is ALWAYS true in PHP.
-        // Both strings must be non-empty before we do substring matching,
-        // otherwise every route (including '/') would match every filter.
+        // Both strings must be non-empty before we do substring matching.
+        //
+        // IMPORTANT: only check if the ROUTE contains the FILTER, never the reverse.
+        // str_contains($normFilter, $normRoute) would mean any short route like "/auth"
+        // or "/login" falsely matches the filter "v1/auth/login" — that causes wrong
+        // files like RouteServiceProvider to be included in the scope.
         if ($normFilter !== '' && $normRoute !== '') {
-            if (str_contains($normRoute, $normFilter) || str_contains($normFilter, $normRoute)) {
+            if (str_contains($normRoute, $normFilter)) {
                 return true;
             }
         }

@@ -489,18 +489,10 @@ class RefactorCommand extends Command
                 continue;
             }
 
-            // ── Ask confirmation (interactive) or proceed (auto) ─────────────
-            if ($this->interactiveMode) {
-                if (! $this->confirm("  Apply these changes to {$filePath}?", true)) {
-                    $this->line('  Skipped.');
-                    $refactorResults[$filePath] = [
-                        'status' => 'skipped', 'issues' => count($issues),
-                        'auto_fixed' => 0, 'manual_todos' => $result->manualTodos,
-                        'changes' => $result->changes,
-                    ];
-                    continue;
-                }
-            }
+            // User already confirmed "Proceed with refactoring N issues?" at Step 3.
+            // Per-file confirmation is removed — apply all changes automatically.
+            // Backups are always written before any file is touched, so every change
+            // can be rolled back via the rollback prompt if tests fail.
 
             // ── Final syntax safety gate ─────────────────────────────────────
             // Even though StaticOrchestrator validates each individual fix,

@@ -102,7 +102,20 @@ class AiClient
             $data = json_decode((string) $response->getBody(), true);
             return $data['content'][0]['text'] ?? '';
         } catch (GuzzleException $e) {
-            throw new RuntimeException('Claude request failed: ' . $e->getMessage());
+            $msg = $e->getMessage();
+
+            // Detect model-not-found (404) and give an actionable error message
+            if (str_contains($msg, '404') && str_contains($msg, 'not_found_error')) {
+                $model = $cfg['model'] ?? 'unknown';
+                throw new RuntimeException(
+                    "Claude model '{$model}' not found on your account. " .
+                    "Update CODEGUARDIAN_CLAUDE_MODEL in your .env to a model available on your plan. " .
+                    "Check available models at: https://docs.anthropic.com/en/docs/models-overview " .
+                    "Example: CODEGUARDIAN_CLAUDE_MODEL=claude-opus-4-5"
+                );
+            }
+
+            throw new RuntimeException('Claude request failed: ' . $msg);
         }
     }
 

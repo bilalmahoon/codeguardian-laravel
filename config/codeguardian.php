@@ -44,7 +44,11 @@ return [
 
     'claude' => [
         'key'         => env('CODEGUARDIAN_CLAUDE_KEY', env('ANTHROPIC_API_KEY')),
-        'model'       => env('CODEGUARDIAN_CLAUDE_MODEL', 'claude-3-5-sonnet-20241022'),
+        // Model to use for Claude API calls.
+        // If you get a 404 "model not found" error, set this in your .env to the
+        // latest model available on your account. Check: https://docs.anthropic.com/en/docs/models-overview
+        // Examples: claude-opus-4-5 | claude-3-7-sonnet-20250219 | claude-3-5-sonnet-20241022
+        'model'       => env('CODEGUARDIAN_CLAUDE_MODEL', 'claude-opus-4-5'),
         'max_tokens'  => env('CODEGUARDIAN_MAX_TOKENS', 8192),
         'temperature' => 0.1,
     ],
