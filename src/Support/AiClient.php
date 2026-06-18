@@ -19,6 +19,23 @@ class AiClient
         $this->http     = new Client(['timeout' => 120]);
     }
 
+    /**
+     * Returns true if any AI provider key is configured in the environment.
+     */
+    public static function hasApiKey(): bool
+    {
+        $provider = config('codeguardian.provider', 'claude');
+
+        return match ($provider) {
+            'claude'  => ! empty(config('codeguardian.claude.key')),
+            'gemini'  => ! empty(config('codeguardian.gemini.key')),
+            'openai'  => ! empty(config('codeguardian.openai.key')),
+            default   => ! empty(config('codeguardian.claude.key'))
+                      || ! empty(config('codeguardian.openai.key'))
+                      || ! empty(config('codeguardian.gemini.key')),
+        };
+    }
+
     public function complete(string $systemPrompt, string $userPrompt): string
     {
         return match ($this->provider) {

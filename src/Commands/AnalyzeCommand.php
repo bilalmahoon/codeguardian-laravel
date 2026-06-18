@@ -6,6 +6,7 @@ namespace CodeGuardian\Laravel\Commands;
 
 use CodeGuardian\Laravel\Analyzers\StaticOrchestrator;
 use CodeGuardian\Laravel\PackageOrchestrator;
+use CodeGuardian\Laravel\Support\AiClient;
 use CodeGuardian\Laravel\Support\CodeScanner;
 use CodeGuardian\Laravel\Support\ReportFormatter;
 use Illuminate\Console\Command;
@@ -20,11 +21,11 @@ class AnalyzeCommand extends Command
                             {--agents=   : Comma-separated agents: architect,security,performance,tech_debt (default: all)}
                             {--output=   : Output directory for reports (default: storage/codeguardian/reports)}
                             {--format=   : Report format: json, html, or both (default: both)}
-                            {--mode=     : Engine mode: static (default, no API key needed) | ai (requires API key)}
+                            {--mode=     : Engine mode: static | hybrid (static + Claude AI) | ai (Claude only)}
                             {--refactor  : After analysis, start interactive refactoring workflow}
                             {--no-report : Print findings to console only, no files saved}';
 
-    protected $description = 'Run a full CodeGuardian analysis (architecture, security, performance, tech debt) — works without any API key';
+    protected $description = 'Run a full CodeGuardian analysis — Principal SE + Senior DevOps + Senior QA level review';
 
     public function handle(
         CodeScanner     $scanner,
@@ -36,17 +37,19 @@ class AnalyzeCommand extends Command
         $moduleOpt = $this->option('module');
         $apiOpt    = $this->option('api');
         $type      = $this->option('type') ?: $this->detectProjectType($path);
-        $mode      = $this->option('mode') ?: config('codeguardian.mode', 'static');
         $format    = $this->option('format') ?: config('codeguardian.output.format', 'both');
         $noReport  = $this->option('no-report');
+
+        // Auto-resolve engine mode: if Claude/AI key configured, default to hybrid
+        $mode = $this->resolveMode();
 
         if (! is_dir($path)) {
             $this->error("Path does not exist: {$path}");
             return self::FAILURE;
         }
 
-        $scopeLabel = $moduleOpt ? "Module: {$moduleOpt}" : ($apiOpt ? "API: {$apiOpt}" : 'Full project');
-        $engineLabel = $mode === 'ai' ? '🤖 AI-powered (requires API key)' : '⚡ Static engine (no API key needed)';
+        $scopeLabel  = $moduleOpt ? "Module: {$moduleOpt}" : ($apiOpt ? "API: {$apiOpt}" : 'Full project');
+        $engineLabel = $this->engineLabel($mode);
 
         $this->info("📁 Scanning: {$path}");
         $this->info("🔧 Project type: {$type}  |  Scope: {$scopeLabel}");
@@ -70,12 +73,10 @@ class AnalyzeCommand extends Command
         $totalLines = $context['summary']['total_lines'];
         $this->info("  ✔  Found {$totalFiles} files ({$totalLines} lines)");
 
-        // Warn on large codebases and offer to continue
         $maxFiles = (int) config('codeguardian.analysis.max_files_per_scan', 2000);
         if ($totalFiles > $maxFiles) {
             $this->warn("  ⚠  Large codebase detected ({$totalFiles} files). Analysis may take a few minutes.");
-            $this->warn("     Tip: use --path=app/Http/Controllers to scan a specific directory,");
-            $this->warn("          or --module=YourModule to scan one module at a time.");
+            $this->warn("     Tip: use --path=app/Http/Controllers or --module=YourModule to narrow scope.");
             if ($this->input->isInteractive() && ! $this->confirm("  Continue scanning all {$totalFiles} files?", true)) {
                 $this->info('  Cancelled. Re-run with --path= to narrow the scope.');
                 return self::SUCCESS;
@@ -83,12 +84,12 @@ class AnalyzeCommand extends Command
         }
         $this->newLine();
 
-        // Run analysis
-        if ($mode === 'ai') {
-            $results = $this->runAiAnalysis($context);
-        } else {
-            $results = $this->runStaticAnalysis($context['files'] ?? [], $path);
-        }
+        // Run analysis based on mode
+        $results = match ($mode) {
+            'ai'     => $this->runAiAnalysis($context),
+            'hybrid' => $this->runHybridAnalysis($context, $path),
+            default  => $this->runStaticAnalysis($context['files'] ?? [], $path),
+        };
 
         if ($results === null) {
             return self::FAILURE;
@@ -113,7 +114,6 @@ class AnalyzeCommand extends Command
 
         $this->newLine();
 
-        // Optional: launch interactive refactoring
         if ($this->option('refactor') && ($results['summary']['total_issues'] ?? 0) > 0) {
             $args = ['--path' => $path, '--type' => $type, '--mode' => 'interactive'];
             if ($moduleOpt) $args['--module'] = $moduleOpt;
@@ -129,19 +129,38 @@ class AnalyzeCommand extends Command
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Static analysis (default — no API key)
+    // Mode resolution — auto-upgrade to hybrid when an AI key is present
     // ──────────────────────────────────────────────────────────────────────────
 
-    /**
-     * @param  array<string,string> $files
-     * @param  string               $scanPath  Must be passed in explicitly — $path from handle() is NOT in scope here
-     */
+    private function resolveMode(): string
+    {
+        $explicit = $this->option('mode') ?: config('codeguardian.mode', 'static');
+
+        if ($explicit !== 'static') {
+            return $explicit; // user or config explicitly chose ai / hybrid
+        }
+
+        // Auto-upgrade to hybrid if an AI key is configured
+        return AiClient::hasApiKey() ? 'hybrid' : 'static';
+    }
+
+    private function engineLabel(string $mode): string
+    {
+        return match ($mode) {
+            'hybrid' => '🔀 Hybrid: Static engine + Claude AI (Principal SE · Senior DevOps · Senior QA)',
+            'ai'     => '🤖 Claude AI only (Principal SE · Senior DevOps · Senior QA)',
+            default  => '⚡ Static engine (no API key needed)',
+        };
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Static analysis (fast, no API key)
+    // ──────────────────────────────────────────────────────────────────────────
+
     private function runStaticAnalysis(array $files, string $scanPath): ?array
     {
-        $orchestrator = new StaticOrchestrator();
-
-        $agentsOpt       = $this->option('agents');
-        $requestedAgents = $agentsOpt ? array_map('trim', explode(',', $agentsOpt)) : [];
+        $orchestrator    = new StaticOrchestrator();
+        $requestedAgents = $this->resolveRequestedAgents();
 
         $options = [
             'architecture' => empty($requestedAgents) || in_array('architect', $requestedAgents),
@@ -159,15 +178,227 @@ class AnalyzeCommand extends Command
         return $this->normalizeStaticResult($result, $scanPath);
     }
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // Hybrid analysis — static for all files, Claude AI for hotspot files
+    // ──────────────────────────────────────────────────────────────────────────
+
+    private function runHybridAnalysis(array $context, string $scanPath): ?array
+    {
+        // Step 1: Static analysis on full codebase
+        $this->line('  [1/2] Running static analysis on all files...');
+        $staticResult = $this->runStaticAnalysis($context['files'] ?? [], $scanPath);
+
+        if ($staticResult === null) {
+            return null;
+        }
+
+        // Step 2: Identify hotspot files (files with most issues)
+        $hotspotPaths = array_keys($staticResult['summary']['hotspot_files'] ?? []);
+        if (empty($hotspotPaths)) {
+            // Fall back to top findings' files
+            $hotspotPaths = array_unique(array_filter(array_map(
+                fn($f) => $f['file'] ?? null,
+                array_slice($staticResult['all_findings'] ?? [], 0, 20)
+            )));
+        }
+
+        $maxHotspots = (int) config('codeguardian.analysis.ai_hotspot_limit', 15);
+        $hotspotPaths = array_slice($hotspotPaths, 0, $maxHotspots);
+
+        if (empty($hotspotPaths)) {
+            $this->line('  [2/2] No hotspot files found — skipping AI deep analysis.');
+            $staticResult['engine'] = 'static';
+            return $staticResult;
+        }
+
+        $this->line("  [2/2] Running Claude AI deep analysis on " . count($hotspotPaths) . " hotspot file(s)...");
+
+        // Build focused context for AI — only hotspot files
+        $allFiles = $context['files'] ?? [];
+        $hotspotFiles = [];
+        foreach ($hotspotPaths as $hPath) {
+            foreach ($allFiles as $filePath => $content) {
+                if (str_contains($filePath, $hPath) || $filePath === $hPath) {
+                    $hotspotFiles[$filePath] = $content;
+                }
+            }
+        }
+
+        if (empty($hotspotFiles)) {
+            $hotspotFiles = array_slice($allFiles, 0, $maxHotspots, true);
+        }
+
+        $aiContext = array_merge($context, [
+            'files'   => $hotspotFiles,
+            'summary' => [
+                'total_files' => count($hotspotFiles),
+                'total_lines' => array_sum(array_map(fn($c) => substr_count($c, "\n") + 1, $hotspotFiles)),
+            ],
+        ]);
+
+        $aiResults = $this->runAiAnalysis($aiContext);
+
+        if ($aiResults === null) {
+            $this->warn('  ⚠  AI analysis failed — using static results only.');
+            $staticResult['engine'] = 'static';
+            return $staticResult;
+        }
+
+        // Step 3: Merge static + AI findings
+        return $this->mergeResults($staticResult, $aiResults, $scanPath);
+    }
+
+    private function mergeResults(array $staticResult, array $aiResult, string $scanPath): array
+    {
+        $aiFindings     = $aiResult['agent_results'] ?? [];
+        $staticFindings = $staticResult['agent_results'] ?? [];
+
+        // Merge agent results — AI enriches static
+        $merged = $staticFindings;
+        foreach ($aiFindings as $agent => $aiAgentResult) {
+            if (! isset($merged[$agent])) {
+                $merged[$agent] = $aiAgentResult;
+                continue;
+            }
+
+            // Combine findings from both; AI findings go first (richer detail)
+            $existingFindings = $merged[$agent]['findings'] ?? [];
+            $newFindings      = $aiAgentResult['findings'] ?? [];
+            $merged[$agent]['findings'] = array_merge($newFindings, $existingFindings);
+
+            // Use AI scores when available (more nuanced)
+            foreach (['architecture_score', 'security_score', 'performance_score', 'tech_debt_score', 'debt_score'] as $scoreKey) {
+                if (isset($aiAgentResult[$scoreKey])) {
+                    $merged[$agent][$scoreKey] = $aiAgentResult[$scoreKey];
+                }
+            }
+        }
+
+        // Rebuild all_findings from merged agents
+        $allFindings = [];
+        foreach ($merged as $agentData) {
+            foreach ($agentData['findings'] ?? [] as $f) {
+                $allFindings[] = $f;
+            }
+        }
+
+        // Rebuild severity counts
+        $counts = ['critical' => 0, 'high' => 0, 'medium' => 0, 'low' => 0];
+        foreach ($allFindings as $f) {
+            $sev = $f['severity'] ?? 'low';
+            $counts[$sev] = ($counts[$sev] ?? 0) + 1;
+        }
+
+        // Rebuild scores
+        $scores = [];
+        foreach ($merged as $agentData) {
+            foreach ($agentData as $k => $v) {
+                if (str_ends_with($k, '_score') && is_numeric($v)) {
+                    $scores[$k] = $v;
+                }
+            }
+        }
+        $overallScore = empty($scores) ? 0 : (int) round(array_sum($scores) / count($scores));
+
+        // Hotspot files
+        $fileIssueCounts = [];
+        foreach ($allFindings as $f) {
+            $file = $f['file'] ?? 'unknown';
+            $fileIssueCounts[$file] = ($fileIssueCounts[$file] ?? 0) + 1;
+        }
+        arsort($fileIssueCounts);
+        $hotspotFiles = array_slice($fileIssueCounts, 0, 10, true);
+
+        // Top findings by severity
+        usort($allFindings, function ($a, $b) {
+            $order = ['critical' => 0, 'high' => 1, 'medium' => 2, 'low' => 3];
+            return ($order[$a['severity'] ?? 'low'] ?? 3) <=> ($order[$b['severity'] ?? 'low'] ?? 3);
+        });
+
+        return [
+            'files_scanned'  => $staticResult['files_scanned'],
+            'total_lines'    => $staticResult['total_lines'],
+            'overall_score'  => $overallScore,
+            'grade'          => $this->scoreToGrade($overallScore),
+            'scores'         => $scores,
+            'agent_results'  => $merged,
+            'all_findings'   => $allFindings,
+            'project_name'   => basename($scanPath),
+            'project_type'   => 'laravel',
+            'scanned_at'     => now()->toISOString(),
+            'engine'         => 'hybrid',
+            'summary'        => [
+                'total_files'   => $staticResult['files_scanned'] ?? 0,
+                'total_lines'   => $staticResult['total_lines'] ?? 0,
+                'total_issues'  => count($allFindings),
+                'critical'      => $counts['critical'],
+                'high'          => $counts['high'],
+                'medium'        => $counts['medium'],
+                'low'           => $counts['low'],
+                'top_findings'  => array_slice($allFindings, 0, 10),
+                'hotspot_files' => $hotspotFiles,
+            ],
+        ];
+    }
+
+    private function scoreToGrade(int $score): string
+    {
+        return match (true) {
+            $score >= 90 => 'A',
+            $score >= 80 => 'B',
+            $score >= 70 => 'C',
+            $score >= 60 => 'D',
+            default      => 'F',
+        };
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // AI analysis — pure Claude (no API key? returns null gracefully)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    private function runAiAnalysis(array $context): ?array
+    {
+        if (! AiClient::hasApiKey()) {
+            $this->warn('  ⚠  No AI API key configured. Set CODEGUARDIAN_CLAUDE_KEY in .env');
+            $this->warn('     Falling back to static engine...');
+            return $this->runStaticAnalysis($context['files'] ?? [], $context['scan_path'] ?? base_path());
+        }
+
+        $provider = config('codeguardian.provider', 'claude');
+        $this->line("  Using AI provider: {$provider}");
+
+        $orchestrator = app(PackageOrchestrator::class);
+        $agentsOpt    = $this->option('agents');
+        $agents       = $agentsOpt ? explode(',', $agentsOpt) : 'all';
+
+        $results = $orchestrator->run($context, $agents, function (string $agent, bool $ok, ?string $err) {
+            if ($ok) {
+                $this->info("  ✔  {$agent} agent completed");
+            } else {
+                $this->warn("  ✗  {$agent} agent failed: {$err}");
+            }
+        });
+
+        return $results;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Helpers
+    // ──────────────────────────────────────────────────────────────────────────
+
+    private function resolveRequestedAgents(): array
+    {
+        $agentsOpt = $this->option('agents');
+        return $agentsOpt ? array_map('trim', explode(',', $agentsOpt)) : [];
+    }
+
     private function normalizeStaticResult(array $raw, string $scanPath = ''): array
     {
-        // Build agent_results from individual agent data
         $agentResults = [];
         foreach ($raw['agents'] as $agentData) {
             $agentResults[$agentData['agent']] = $agentData;
         }
 
-        // Build scores map — iterate keys directly to avoid array_keys/array_filter index confusion
         $scores = [];
         foreach ($raw['agents'] as $agentData) {
             foreach (array_keys($agentData) as $k) {
@@ -206,34 +437,6 @@ class AnalyzeCommand extends Command
         ];
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // AI analysis (optional — requires API key in .env)
-    // ──────────────────────────────────────────────────────────────────────────
-
-    private function runAiAnalysis(array $context): ?array
-    {
-        $provider = config('codeguardian.provider', 'openai');
-        $this->warn("  Using AI provider: {$provider}");
-
-        $orchestrator = app(PackageOrchestrator::class);
-        $agentsOpt    = $this->option('agents');
-        $agents       = $agentsOpt ? explode(',', $agentsOpt) : 'all';
-
-        $results = $orchestrator->run($context, $agents, function (string $agent, bool $ok, ?string $err) {
-            if ($ok) {
-                $this->info("  ✔  {$agent} agent completed");
-            } else {
-                $this->warn("  ✗  {$agent} agent failed: {$err}");
-            }
-        });
-
-        return $results;
-    }
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // Output helpers
-    // ──────────────────────────────────────────────────────────────────────────
-
     private function printBanner(): void
     {
         $this->info('');
@@ -246,9 +449,10 @@ class AnalyzeCommand extends Command
     {
         $summary = $results['summary'] ?? [];
         $scores  = $results['scores'] ?? [];
+        $engine  = $results['engine'] ?? $mode;
 
         $this->info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        $this->info('  ANALYSIS SUMMARY');
+        $this->info('  ANALYSIS SUMMARY  [engine: ' . strtoupper($engine) . ']');
         $this->info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
         if (isset($results['overall_score'])) {
@@ -281,7 +485,6 @@ class AnalyzeCommand extends Command
             if ($low > 0)      $this->line("  🟢 Low:      {$low}");
         }
 
-        // Top 5 findings
         $topFindings = $summary['top_findings'] ?? [];
         if (! empty($topFindings)) {
             $this->newLine();
@@ -295,7 +498,6 @@ class AnalyzeCommand extends Command
             }
         }
 
-        // Hotspot files
         $hotspots = $summary['hotspot_files'] ?? [];
         if (! empty($hotspots)) {
             $this->newLine();
