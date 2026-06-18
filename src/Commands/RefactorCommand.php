@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace CodeGuardian\Laravel\Commands;
 
+use CodeGuardian\Laravel\Agents\RefactorAgent;
 use CodeGuardian\Laravel\Analyzers\StaticOrchestrator;
+use CodeGuardian\Laravel\Support\AiClient;
 use CodeGuardian\Laravel\Support\CodeScanner;
 use CodeGuardian\Laravel\Support\ModuleDetector;
 use CodeGuardian\Laravel\Support\ReportFormatter;
@@ -45,6 +47,10 @@ class RefactorCommand extends Command
     private bool   $backupEnabled;
     private bool   $testsEnabled;
     private bool   $existingTestsEnabled;
+    /** Whether an AI provider is configured and mode allows AI refactoring */
+    private bool   $aiEnabled;
+    /** 'static' | 'ai' | 'hybrid' */
+    private string $aiMode;
 
     /** @var array<string,string> Rollback map: [ relativeFilePath => originalContent ] */
     private array $backups = [];
@@ -68,13 +74,17 @@ class RefactorCommand extends Command
         $this->interactiveMode      = ($this->option('mode') ?? 'interactive') === 'interactive';
         $this->backupEnabled        = ! $this->option('no-backup');
         $this->testsEnabled         = ! $this->option('skip-tests');
-        // Existing project tests are OPT-IN only — they require a properly
-        // configured local environment (DB, queues, .env.testing) and will
-        // produce false positives on machines where that isn't set up.
-        // Default: only run CodeGuardian-generated stubs (pure unit tests, no env needed).
         $this->existingTestsEnabled = (bool) $this->option('with-existing-tests');
         $this->backups              = [];
         $this->orchestrator         = new StaticOrchestrator();
+
+        // Detect AI mode
+        $this->aiMode    = config('codeguardian.mode', 'static');
+        $provider        = config('codeguardian.provider', 'openai');
+        $keyMap          = ['claude' => 'claude.key', 'openai' => 'openai.key', 'gemini' => 'gemini.key'];
+        $keyPath         = $keyMap[$provider] ?? 'openai.key';
+        $this->aiEnabled = in_array($this->aiMode, ['ai', 'hybrid'], true)
+                        && ! empty(config("codeguardian.{$keyPath}"));
 
         if (! is_dir($this->projectRoot)) {
             $this->error("Path does not exist: {$this->projectRoot}");
@@ -89,6 +99,14 @@ class RefactorCommand extends Command
 
         $this->info("  Scope   : {$scope['label']}");
         $this->info("  Files   : {$context['summary']['total_files']}");
+
+        if ($this->aiEnabled) {
+            $provider = config('codeguardian.provider', 'claude');
+            $model    = config("codeguardian.{$provider}.model", '');
+            $this->info("  Engine  : ⚡ Static + 🤖 AI deep-refactoring ({$provider} / {$model})");
+        } else {
+            $this->info("  Engine  : ⚡ Static only  (set CODEGUARDIAN_MODE=hybrid + API key for AI)");
+        }
         $this->newLine();
 
         // ── Step 2: Analyze ──────────────────────────────────────────────────
@@ -519,14 +537,23 @@ class RefactorCommand extends Command
                 }
             }
 
-            $this->info("  ✔  Saved ({$result->autoFixed} auto-fix(es), {$result->manualTodos} manual TODO(s))");
+            $this->info("  ✔  Static fixes saved ({$result->autoFixed} auto-fix(es), {$result->manualTodos} manual TODO(s))");
+
+            $aiChanges = [];
+
+            // ── AI deep-refactoring pass (mode=ai or mode=hybrid) ────────────
+            if ($this->aiEnabled) {
+                $aiChanges = $this->applyAiRefactoring($filePath, $fullPath, $issues);
+            } elseif ($this->aiMode !== 'static') {
+                $this->line('  ⚡ AI provider not configured — static-only mode.');
+            }
 
             $refactorResults[$filePath] = [
                 'status'       => 'refactored',
                 'issues'       => count($issues),
                 'auto_fixed'   => $result->autoFixed,
                 'manual_todos' => $result->manualTodos,
-                'changes'      => $result->changes,
+                'changes'      => array_merge($result->changes, $aiChanges),
             ];
 
             // ── Per-file test verification ────────────────────────────────────
@@ -757,6 +784,164 @@ class RefactorCommand extends Command
         if ($critical > 0) $this->error("  Critical     : {$critical}");
         if ($high > 0)     $this->warn("  High         : {$high}");
         $this->newLine();
+    }
+
+    // ─── AI deep-refactoring ─────────────────────────────────────────────────
+
+    /**
+     * Send the (already-static-fixed) file to Claude / GPT / Gemini for deep
+     * structural refactoring: method splitting, service extraction, query
+     * optimization, design patterns — things regex cannot do.
+     *
+     * Returns the list of AI-generated change descriptions (for the final report).
+     *
+     * @return list<string>
+     */
+    private function applyAiRefactoring(string $filePath, string $fullPath, array $issues): array
+    {
+        $provider = config('codeguardian.provider', 'claude');
+        $this->newLine();
+        $this->info("  🤖 Running AI deep-refactoring ({$provider})...");
+        $this->line('     Structural improvements: method splitting, service extraction,');
+        $this->line('     query optimization, design patterns...');
+
+        // Read current file (may already have static fixes applied)
+        $currentContent = File::get($fullPath);
+
+        // Filter to issues that still need structural work
+        $structuralCategories = [
+            'fat_controller', 'fat_model', 'service_layer', 'solid',
+            'high_complexity', 'large_class', 'deep_nesting', 'long_method',
+            'duplication', 'dependency_injection', 'n_plus_one', 'missing_cache',
+            'missing_index', 'sql_injection', 'authorization', 'magic_numbers',
+        ];
+        $relevantIssues = array_filter($issues, fn($i) =>
+            in_array($i['category'] ?? '', $structuralCategories, true)
+        );
+
+        if (empty($relevantIssues)) {
+            $relevantIssues = $issues; // pass all if no structural ones specifically
+        }
+
+        try {
+            $agent  = new RefactorAgent();
+            $result = $agent->refactorFile($filePath, $currentContent, array_values($relevantIssues));
+
+            if (! empty($result['error'])) {
+                $this->warn("  ⚠  AI refactoring error: {$result['error']}");
+                return [];
+            }
+
+            $aiContent = $result['refactored_file'] ?? null;
+            $aiChanges = $result['changes'] ?? [];
+
+            if (empty($aiContent) || $aiContent === $currentContent) {
+                $this->line('  ℹ  AI: no further structural changes needed.');
+                return [];
+            }
+
+            // Safety gate — validate the AI-generated PHP
+            if (! $this->orchestrator->isValidPhp($aiContent)) {
+                $this->warn('  ⚠  AI-generated code has PHP syntax errors — AI pass skipped.');
+                return [];
+            }
+
+            // Show what Claude did
+            $this->newLine();
+            $this->info('  🤖 AI REFACTORING CHANGES:');
+            foreach ($aiChanges as $change) {
+                $type = $change['type'] ?? 'change';
+                $desc = $change['description'] ?? '';
+                $this->line("  ✔  [{$type}] {$desc}");
+            }
+
+            // Show tests Claude recommends
+            if (! empty($result['tests_needed'])) {
+                $this->newLine();
+                $this->line('  📋 Recommended tests to write:');
+                foreach ($result['tests_needed'] as $test) {
+                    $this->line("     • {$test}");
+                }
+            }
+
+            // Show a brief diff of AI changes (first 40 lines)
+            $diffLines = $this->quickDiff($currentContent, $aiContent, 40);
+            if (! empty($diffLines)) {
+                $this->newLine();
+                $this->line('  DIFF (AI changes):');
+                foreach ($diffLines as $line) {
+                    if (str_starts_with($line, '+')) {
+                        $this->info('  ' . $line);
+                    } elseif (str_starts_with($line, '-')) {
+                        $this->warn('  ' . $line);
+                    }
+                }
+            }
+
+            // Ask confirmation
+            if ($this->interactiveMode) {
+                if (! $this->confirm('  Apply AI refactoring changes?', true)) {
+                    $this->line('  AI changes skipped.');
+                    return [];
+                }
+            }
+
+            // Write AI-refactored content
+            File::put($fullPath, $aiContent);
+
+            // Write any new files Claude generated (Services, etc.)
+            foreach (($result['generated_files'] ?? []) as $genPath => $genContent) {
+                if (! is_string($genPath) || ! is_string($genContent) || empty($genContent)) {
+                    continue;
+                }
+                $absGenPath = str_starts_with($genPath, '/')
+                    ? $genPath
+                    : $this->projectRoot . '/' . ltrim($genPath, '/');
+
+                if (! File::exists($absGenPath)) {
+                    File::ensureDirectoryExists(dirname($absGenPath));
+                    File::put($absGenPath, $genContent);
+                    $this->info("  📄 AI generated: {$genPath}");
+                } else {
+                    $this->line("  ⚠  Already exists (skipped): {$genPath}");
+                }
+            }
+
+            $this->info("  ✔  AI refactoring saved (" . count($aiChanges) . " structural change(s))");
+
+            return array_map(fn($c) => '[AI] ' . ($c['type'] ?? '') . ': ' . ($c['description'] ?? ''), $aiChanges);
+
+        } catch (\Throwable $e) {
+            $this->warn("  ⚠  AI refactoring failed: {$e->getMessage()}");
+            return [];
+        }
+    }
+
+    /** Simple line-by-line diff, returns first $maxLines changed lines */
+    private function quickDiff(string $before, string $after, int $maxLines): array
+    {
+        $beforeLines = explode("\n", $before);
+        $afterLines  = explode("\n", $after);
+        $diff        = [];
+        $count       = 0;
+        $maxLen      = max(count($beforeLines), count($afterLines));
+
+        for ($i = 0; $i < $maxLen && $count < $maxLines; $i++) {
+            $b = $beforeLines[$i] ?? null;
+            $a = $afterLines[$i] ?? null;
+            if ($b !== $a) {
+                if ($b !== null) {
+                    $diff[] = '- ' . $b;
+                    $count++;
+                }
+                if ($a !== null) {
+                    $diff[] = '+ ' . $a;
+                    $count++;
+                }
+            }
+        }
+
+        return $diff;
     }
 
     // ─── Baseline-aware failure helpers ──────────────────────────────────────

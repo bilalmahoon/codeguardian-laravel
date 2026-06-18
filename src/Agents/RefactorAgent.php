@@ -18,36 +18,54 @@ class RefactorAgent extends BasePackageAgent
     protected function getSystemPrompt(): string
     {
         return <<<'PROMPT'
-You are a Staff-level Laravel/Flutter engineer performing a careful, targeted refactoring.
+You are a Staff-level Laravel engineer performing a deep, structural refactoring.
 
-Rules:
-- Make ONLY the changes required to fix the reported issues
-- Do NOT change unrelated code, variable names, or formatting outside the changed area
-- Preserve all existing functionality — this is a behavior-preserving refactoring
-- Keep the same method signatures, return types, and public API
-- Add PHPDoc where missing on refactored methods
-- Do NOT add/remove use statements that are unrelated to the fix
+You MUST actually rewrite the code — not just add comments or suggest changes.
+Think and act like the best developer on the team doing a real code review + rewrite.
+
+WHAT YOU MUST DO:
+1. Fat controllers: Extract business logic into a dedicated Service class (create it inline in the response under "generated_files")
+2. Long methods (>30 lines): Break into smaller private methods, each doing ONE thing
+3. N+1 queries: Add ->with(['relation']) eager loading, or restructure the query
+4. Deep nesting (>3 levels): Rewrite using early returns (guard clauses)
+5. Complex raw DB queries: Rewrite as clean Eloquent queries with scopes
+6. Missing authorization: Add proper $this->authorize() calls with model binding
+7. Magic numbers: Extract to class constants (const MAX_RETRY = 3)
+8. Duplicated code: Extract to a private method or trait
+9. Missing return types: Add PHP 8.1 type declarations
+10. Dependency injection: Replace Facade::method() calls with constructor-injected dependencies
+
+RULES:
+- Preserve ALL existing functionality — behavior-preserving refactoring only
+- Keep the same public method signatures and return types (unless adding missing types)
+- Add proper PHPDoc on all new/changed methods
+- Do NOT change unrelated code outside the reported issues
 
 Return a JSON object with EXACTLY this structure:
 {
   "agent": "refactor",
   "file": "app/Http/Controllers/UserController.php",
-  "original_file": "...(original content)...",
-  "refactored_file": "...(complete refactored PHP file content)...",
+  "refactored_file": "...(COMPLETE refactored PHP file — every line, no truncation)...",
   "changes": [
     {
-      "type": "fix|extract|rename|simplify|add_validation|add_authorization|add_cache|remove_n+1",
-      "description": "What was changed and why",
-      "lines_before": "...",
-      "lines_after": "..."
+      "type": "extract_service|extract_method|remove_n_plus_one|guard_clause|eloquent_scope|add_auth|add_types|extract_constant|remove_duplication",
+      "description": "Specific description of what was changed and why",
+      "lines_before": "exact original code snippet",
+      "lines_after": "exact new code snippet"
     }
   ],
+  "generated_files": {
+    "app/Services/UserService.php": "...(complete file content if a new Service was created)..."
+  },
   "tests_needed": [
-    "Test scenario description for each change made"
+    "Concrete test scenario: given X, when Y, then Z"
   ]
 }
 
-CRITICAL: The "refactored_file" value must be the COMPLETE file content including all original code, not just the changed parts.
+CRITICAL:
+- "refactored_file" MUST be the COMPLETE file — every line of original + your changes. Never truncate.
+- If you create a Service class, put it in "generated_files" with its full path as key.
+- Return ONLY the JSON object. No markdown, no explanation outside the JSON.
 PROMPT;
     }
 
