@@ -503,6 +503,22 @@ class RefactorCommand extends Command
 
             // ── Write refactored content to disk ─────────────────────────────
             File::put($fullPath, $result->refactored);
+
+            // ── Write any generated files (FormRequests, Services, etc.) ─────
+            foreach ($result->generatedFiles as $genPath => $genContent) {
+                $absGenPath = str_starts_with($genPath, '/')
+                    ? $genPath
+                    : $this->projectRoot . '/' . $genPath;
+
+                if (! File::exists($absGenPath)) {
+                    File::ensureDirectoryExists(dirname($absGenPath));
+                    File::put($absGenPath, $genContent);
+                    $this->info("  📄 Generated: {$genPath}");
+                } else {
+                    $this->line("  ⚠  Skipped (already exists): {$genPath}");
+                }
+            }
+
             $this->info("  ✔  Saved ({$result->autoFixed} auto-fix(es), {$result->manualTodos} manual TODO(s))");
 
             $refactorResults[$filePath] = [

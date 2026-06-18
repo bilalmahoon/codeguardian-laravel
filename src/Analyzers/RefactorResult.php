@@ -17,6 +17,8 @@ final class RefactorResult
         public readonly array  $changes,
         public readonly int    $autoFixed,
         public readonly int    $manualTodos,
+        /** @var array<string,string>  [ absolutePath => phpContent ] new files to create */
+        public readonly array  $generatedFiles = [],
     ) {}
 
     /** True when the refactored content differs from the original. */
@@ -59,11 +61,12 @@ final class RefactorResult
     public function toArray(): array
     {
         return [
-            'file'         => $this->filePath,
-            'has_changes'  => $this->hasChanges(),
-            'auto_fixed'   => $this->autoFixed,
-            'manual_todos' => $this->manualTodos,
-            'changes'      => $this->changes,
+            'file'            => $this->filePath,
+            'has_changes'     => $this->hasChanges(),
+            'auto_fixed'      => $this->autoFixed,
+            'manual_todos'    => $this->manualTodos,
+            'changes'         => $this->changes,
+            'generated_files' => array_keys($this->generatedFiles),
         ];
     }
 }

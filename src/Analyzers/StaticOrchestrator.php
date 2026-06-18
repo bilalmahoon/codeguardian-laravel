@@ -184,35 +184,38 @@ class StaticOrchestrator
      */
     public function refactorFile(string $filePath, string $content, array $findings): RefactorResult
     {
-        // Deduplicate: keep first finding per category
+        // Build category map — keep ALL findings per category (not just first)
+        // so multi-occurrence fixes (N+1 on different lines) can all be applied.
         $findingsByCategory = [];
         foreach ($findings as $finding) {
             $cat = $finding['category'] ?? 'unknown';
-            $findingsByCategory[$cat] ??= $finding;
+            $findingsByCategory[$cat][] = $finding;
         }
+        // Flatten to single finding per category for the hint/note phases
+        $singleByCategory = array_map(fn($list) => $list[0], $findingsByCategory);
 
-        $refactored = $content;
-        $changes    = [];
+        $refactored     = $content;
+        $changes        = [];
+        $generatedFiles = [];
 
-        // Phase 1 — auto-fix with syntax safety gate
-        [$refactored, $autoFixChanges] = $this->applyAutoFixesSafely($refactored, $content, $findingsByCategory);
+        // Phase 1 — actual code transformations (with PHP syntax safety gate)
+        [$refactored, $autoFixChanges, $generatedFiles] = $this->applyAutoFixesSafely(
+            $refactored, $content, $findingsByCategory, $filePath
+        );
         $changes = array_merge($changes, $autoFixChanges);
 
-        // Phase 2 — inline hints (comments only, can never break syntax)
-        [$refactored, $hintChanges] = $this->applyInlineHints($refactored, $findingsByCategory);
-        $changes = array_merge($changes, $hintChanges);
-
-        // Phase 3 — manual notes (no code change)
-        $manualNotes = $this->applyManualNotes($findingsByCategory);
+        // Phase 2 — manual guidance notes for what CANNOT be auto-fixed
+        $manualNotes = $this->applyManualNotes($singleByCategory, $autoFixChanges);
         $changes     = array_merge($changes, $manualNotes);
 
         return new RefactorResult(
-            filePath:    $filePath,
-            original:    $content,
-            refactored:  $refactored,
-            changes:     $changes,
-            autoFixed:   count(array_filter($changes, fn($c) => str_starts_with($c, 'Auto-fixed:') || str_starts_with($c, 'Auto-commented:'))),
-            manualTodos: count(array_filter($changes, fn($c) => str_starts_with($c, '[MANUAL]'))),
+            filePath:       $filePath,
+            original:       $content,
+            refactored:     $refactored,
+            changes:        $changes,
+            autoFixed:      count(array_filter($changes, fn($c) => str_starts_with($c, 'Auto-fixed:'))),
+            manualTodos:    count(array_filter($changes, fn($c) => str_starts_with($c, '[MANUAL]'))),
+            generatedFiles: $generatedFiles,
         );
     }
 
@@ -226,288 +229,272 @@ class StaticOrchestrator
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Phase 1 — Auto-fixes (deterministic code transformations)
+    // Phase 1 — Actual code transformations
     // ──────────────────────────────────────────────────────────────────────────
 
     /**
-     * Apply auto-fixes one at a time, with a PHP syntax check after each one.
-     * If a fix produces invalid PHP it is rolled back and downgraded to [MANUAL].
+     * Apply every applicable fix in order. Each fix is syntax-checked before
+     * it is accepted; failed fixes are rolled back to the pre-fix content so
+     * one bad transformation never cascades into the next.
      *
-     * @param  string $originalContent  The untouched original (for rollback)
-     * @return array{0: string, 1: list<string>}
+     * Returns [modifiedContent, changeMessages, generatedFiles].
+     *
+     * @param  array<string,list<array>> $findingsByCategory  ALL findings per cat
+     * @return array{0:string, 1:list<string>, 2:array<string,string>}
      */
     private function applyAutoFixesSafely(
         string $content,
         string $originalContent,
-        array  $findingsByCategory
+        array  $findingsByCategory,
+        string $filePath = ''
     ): array {
-        $changes = [];
+        $changes        = [];
+        $generatedFiles = [];
 
-        // ── Fix 1: mass_assignment ($request->all() → $request->validated()) ─
+        /**
+         * Safe-apply helper: runs $fixFn($content), validates PHP, accepts or
+         * reverts. For Blade files ($isBlade=true) PHP validation is skipped.
+         */
+        $isBlade = str_ends_with($filePath, '.blade.php');
+        $apply   = function (string $cat, callable $fixFn, string $successMsg, string $failMsg)
+                   use (&$content, &$changes, $isBlade): void {
+            [$candidate, $fixed] = $fixFn($content);
+            if (! $fixed) {
+                return;
+            }
+            if ($isBlade || $this->isValidPhp($candidate)) {
+                $content   = $candidate;
+                $changes[] = "Auto-fixed: {$successMsg}";
+            } else {
+                $changes[] = "[MANUAL] {$cat}: {$failMsg}";
+            }
+        };
+
+        // ── 1. Mass assignment: $request->all() → $request->validated() ──────
         if (isset($findingsByCategory['mass_assignment'])) {
-            [$candidate, $fixed] = $this->fixMassAssignment($content);
-            if ($fixed) {
-                if ($this->isValidPhp($candidate)) {
-                    $content   = $candidate;
-                    $changes[] = 'Auto-fixed: replaced $request->all() with $request->validated()';
-                } else {
-                    $changes[] = '[MANUAL] mass_assignment: auto-fix would produce invalid PHP — replace $request->all() with $request->validated() manually';
-                }
-            }
+            $apply('mass_assignment',
+                fn($c) => $this->fixMassAssignment($c),
+                'replaced $request->all() with $request->validated()',
+                'replace $request->all() with $request->validated() — use validated() to ensure only declared inputs are accepted'
+            );
         }
 
-        // ── Fix 2: debug_code (remove dd/dump/var_dump/print_r) ──────────────
+        // ── 2. Debug code: remove dd/dump/var_dump/print_r ───────────────────
         if (isset($findingsByCategory['debug_code'])) {
-            [$candidate, $fixed] = $this->removeDebugCode($content);
-            if ($fixed) {
-                if ($this->isValidPhp($candidate)) {
-                    $content   = $candidate;
-                    $changes[] = 'Auto-fixed: removed debug statements (dd, dump, var_dump)';
+            $apply('debug_code',
+                fn($c) => $this->removeDebugCode($c),
+                'removed debug statements (dd, dump, var_dump)',
+                'remove dd()/dump()/var_dump() calls before deploying to production'
+            );
+        }
+
+        // ── 3. SQL injection: parameterize raw DB queries ─────────────────────
+        if (isset($findingsByCategory['sql_injection'])) {
+            $apply('sql_injection',
+                fn($c) => $this->fixSqlInjection($c),
+                'SQL injection fixed — replaced variable interpolation in DB queries with ? parameterized bindings',
+                'replace "$var" inside query strings with "?" and pass [$var] as the bindings array e.g. DB::select("SELECT ... WHERE id = ?", [$id])'
+            );
+        }
+
+        // ── 4. XSS: {!! $var !!} → {{ $var }} in Blade ───────────────────────
+        if (isset($findingsByCategory['xss'])) {
+            $apply('xss',
+                fn($c) => $this->fixXss($c),
+                'XSS fixed — replaced unescaped {!! !!} output with escaped {{ }} in Blade templates',
+                'replace {!! $var !!} with {{ $var }} — only use {!! !!} for pre-sanitized HTML'
+            );
+        }
+
+        // ── 5. Hardcoded secrets → env() references ───────────────────────────
+        if (isset($findingsByCategory['secret_exposure'])) {
+            $apply('secret_exposure',
+                fn($c) => $this->fixHardcodedSecrets($c),
+                'hardcoded credentials replaced with env() references — add the real values to your .env file',
+                'move hardcoded passwords/keys/tokens to .env and reference with env(\'KEY\') or config(\'app.key\')'
+            );
+        }
+
+        // ── 6. select_all: Model::all() → Model::paginate(25) ─────────────────
+        if (isset($findingsByCategory['select_all'])) {
+            $apply('select_all',
+                fn($c) => $this->fixSelectAll($c),
+                'Model::all() replaced with paginate(25) — adjust page size in codeguardian config if needed',
+                'replace Model::all() with Model::paginate(25) — verify callers accept a LengthAwarePaginator, not a Collection'
+            );
+        }
+
+        // ── 7. N+1 queries: add ->with() eager loading ────────────────────────
+        if (isset($findingsByCategory['n_plus_one'])) {
+            foreach ($findingsByCategory['n_plus_one'] as $finding) {
+                $apply('n_plus_one',
+                    fn($c) => $this->fixNPlusOne($c, $finding),
+                    'N+1 query fixed — added eager loading with ->with() for detected relationship',
+                    "add ->with('relationName') before ->get() to avoid N+1 queries — detected in: " . ($finding['code_snippet'] ?? '')
+                );
+            }
+        }
+
+        // ── 8. Missing authorization: add $this->authorize() stubs ────────────
+        if (isset($findingsByCategory['authorization'])) {
+            $apply('authorization',
+                fn($c) => $this->fixMissingAuthorization($c),
+                'authorization stubs added — $this->authorize() inserted in store/update/destroy methods (update with your Policy)',
+                'add $this->authorize(\'action\', Model::class) to store/update/destroy — or use a Policy class'
+            );
+        }
+
+        // ── 9. Inefficient count: count(Model::all()) → Model::count() ────────
+        if (isset($findingsByCategory['inefficient_count'])) {
+            $apply('inefficient_count',
+                fn($c) => $this->fixInefficientCount($c),
+                'inefficient count fixed — replaced count(Model::all()) with Model::count() (DB-level count, no memory overhead)',
+                'replace count($model::all()) with Model::count() to run a COUNT(*) SQL query instead of loading all rows'
+            );
+        }
+
+        // ── 10. Missing return types: add PHP 8.1 type declarations ────────────
+        if (isset($findingsByCategory['missing_types'])) {
+            $apply('missing_types',
+                fn($c) => $this->fixMissingReturnTypes($c),
+                'PHP 8.1 return type declarations added to methods with inferable types (bool/int/void/string)',
+                'add return type declarations to public/protected methods — start with easy ones: bool for is*/has*, void for handle/setUp'
+            );
+        }
+
+        // ── 11. Inline validation → FormRequest class generation ─────────────
+        if (isset($findingsByCategory['solid']) || isset($findingsByCategory['fat_controller'])) {
+            $generated = $this->generateFormRequest($content, $filePath);
+            if ($generated !== null) {
+                [$newContent, $requestFile, $requestClass] = $generated;
+                if ($this->isValidPhp($newContent) && $this->isValidPhp($requestFile['content'])) {
+                    $content                              = $newContent;
+                    $generatedFiles[$requestFile['path']] = $requestFile['content'];
+                    $changes[] = "Auto-fixed: extracted inline validation into {$requestClass} FormRequest — new file: {$requestFile['path']}";
                 } else {
-                    $changes[] = '[MANUAL] debug_code: auto-fix would produce invalid PHP — remove dd()/dump() calls manually';
+                    $changes[] = '[MANUAL] solid: extract $request->validate([...]) into a dedicated FormRequest class in app/Http/Requests/';
                 }
             }
         }
 
-        // ── Fix 3: select_all — NOT auto-replaced ─────────────────────────────
-        // Model::all() → paginate(25) is context-dependent:
-        //   • Safe   in a controller returning a paginated resource
-        //   • UNSAFE if the result is chained with ->first(), ->count(), ->isEmpty(),
-        //     ->sum(), ->pluck(), etc. (LengthAwarePaginator != Collection)
-        //   • UNSAFE if the variable is passed to something expecting a Collection
-        // We ALWAYS downgrade this to an inline hint so the developer reviews it.
-        if (isset($findingsByCategory['select_all'])) {
-            $changes[] = '[MANUAL] select_all: replace Model::all() with Model::paginate(25) '
-                       . '— verify callers accept a Paginator (not a Collection) before applying';
-        }
-
-        return [$content, $changes];
+        return [$content, $changes, $generatedFiles];
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Phase 2 — Inline hints (// CODEGUARDIAN-FIX: comments at exact lines)
+    // Phase 2 — Manual guidance (only for issues not already auto-fixed)
     // ──────────────────────────────────────────────────────────────────────────
 
     /**
-     * @return array{0: string, 1: list<string>}  [modified content, change messages]
+     * Emit [MANUAL] guidance notes for issues that could not be deterministically
+     * auto-fixed. Skip any category that was already handled in Phase 1.
+     *
+     * @param  array<string,array>  $singleByCategory  one finding per category
+     * @param  list<string>         $alreadyFixed      change messages from Phase 1
+     * @return list<string>
      */
-    private function applyInlineHints(string $content, array $findingsByCategory): array
+    private function applyManualNotes(array $singleByCategory, array $alreadyFixed = []): array
     {
-        $changes = [];
-
-        $inlineHintMap = [
-            'n_plus_one'      => fn($f) => "N+1 QUERY: Add eager loading above.\n     Replace: ->get()  →  ->with(['relationName'])->get()",
-            'eager_loading'   => fn($f) => "N+1 QUERY: Add eager loading above.\n     Replace: ->get()  →  ->with(['relationName'])->get()",
-            'inefficient_count' => fn($f) => "PERFORMANCE: count() loads all records into memory.\n     Replace: count(\$collection)  →  Model::where(...)->count()",
-            'memory_usage'    => fn($f) => "MEMORY: ::all() in bulk operation loads every record at once.\n     Replace with: Model::chunk(500, function(\$items) { ... })",
-            'sql_injection'   => function ($f) {
-                $snippet = $f['code_snippet'] ?? '...';
-                return "SQL INJECTION: Replace string concatenation with parameterized bindings.\n" .
-                       "     BEFORE: {$snippet}\n" .
-                       "     AFTER:  DB::select('SELECT ... WHERE id = ?', [\$id])";
-            },
-        ];
-
-        foreach ($inlineHintMap as $cat => $messageFn) {
-            if (! isset($findingsByCategory[$cat])) {
-                continue;
-            }
-
-            $finding = $findingsByCategory[$cat];
-            $line    = $finding['line_start'] ?? 0;
-
-            [$content, $inserted] = $this->insertInlineFixComment($content, $line, $messageFn($finding));
-            if ($inserted) {
-                $changes[] = "Auto-commented: {$cat} at line {$line} — see inline CODEGUARDIAN-FIX comment";
-            } else {
-                $changes[] = "[MANUAL] {$cat}: " . ($finding['recommendation'] ?? 'Review manually');
+        // Build a set of categories already handled so we don't double-report
+        $handled = [];
+        foreach ($alreadyFixed as $msg) {
+            // "Auto-fixed: sql_injection …" — extract category from the note
+            if (preg_match('/Auto-fixed:.*?(\w+)\s/', $msg, $m)) {
+                $handled[] = strtolower($m[1]);
             }
         }
 
-        return [$content, $changes];
-    }
+        $note = function (string $cat, string $msg) use ($singleByCategory, $handled): array {
+            if (! isset($singleByCategory[$cat]) || in_array($cat, $handled, true)) {
+                return [];
+            }
+            return ["[MANUAL] {$msg}"];
+        };
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // Phase 3 — Manual notes (guidance only, no code change)
-    // ──────────────────────────────────────────────────────────────────────────
-
-    /** @return list<string> */
-    private function applyManualNotes(array $findingsByCategory): array
-    {
         $notes = [];
 
-        // Architectural
-        $notes += $this->manualNote($findingsByCategory, 'fat_controller',
-            '[MANUAL] Fat controller — extract business logic to a dedicated Service class');
-        $notes += $this->manualNote($findingsByCategory, 'service_layer',
-            '[MANUAL] Missing service layer — create a Service class and inject it via constructor');
-        $notes += $this->manualNote($findingsByCategory, 'solid',
-            '[MANUAL] SOLID violation — extract inline validation to a FormRequest class');
-        $notes += $this->manualNote($findingsByCategory, 'fat_model',
-            '[MANUAL] Fat model — extract business methods to a Service class');
-        $notes += $this->manualNote($findingsByCategory, 'dependency_injection',
-            '[MANUAL] Heavy static facade use — inject dependencies via constructor instead');
+        // Architecture
+        $notes = array_merge($notes,
+            $note('fat_controller',       'Fat controller — extract business logic to app/Services/{Name}Service.php, inject via constructor'),
+            $note('service_layer',        'Missing service layer — create a Service class for DB + business logic, keep controller thin'),
+            $note('solid',                'SOLID: extract $request->validate([...]) into a dedicated FormRequest in app/Http/Requests/'),
+            $note('fat_model',            'Fat model — move business methods to a Service or Action class'),
+            $note('dependency_injection', 'Heavy facade use — inject dependencies via constructor (easier to test and mock)'),
+            $note('long_method',          'Long method — break into smaller private methods, each doing one thing'),
+        );
 
         // Security
-        $notes += $this->manualNote($findingsByCategory, 'secret_exposure',
-            '[MANUAL] Hardcoded secret — move to .env and access via env() or config()');
-        $notes += $this->manualNote($findingsByCategory, 'authorization',
-            '[MANUAL] Missing authorization — add $this->authorize() or use a Policy class');
-        $notes += $this->manualNote($findingsByCategory, 'xss',
-            '[MANUAL] Unescaped output {!! !!} — use {{ }} unless HTML is explicitly sanitized');
-        $notes += $this->manualNote($findingsByCategory, 'insecure_upload',
-            "[MANUAL] File upload lacks MIME validation — add: 'file' => 'required|file|mimes:jpg,png,pdf|max:10240'");
+        $notes = array_merge($notes,
+            $note('secret_exposure',  'Hardcoded secret — move value to .env, reference with env(\'KEY\') or config(\'app.key\')'),
+            $note('authorization',    'Missing authorization — add $this->authorize(\'action\', Model::class) in store/update/destroy'),
+            $note('xss',              'XSS: replace {!! $var !!} with {{ $var }} — only use raw output for pre-sanitized HTML'),
+            $note('insecure_upload',  "File upload: add MIME + size validation: 'file' => 'required|file|mimes:jpg,png,pdf|max:10240'"),
+            $note('sql_injection',    'SQL injection: replace DB::select("...{$var}...") with parameterized DB::select("...?...", [$var])'),
+        );
 
         // Performance
-        $notes += $this->manualNote($findingsByCategory, 'missing_cache',
-            "[MANUAL] Complex query without caching — wrap in Cache::remember('key', 3600, fn() => ...)");
-        $notes += $this->manualNote($findingsByCategory, 'missing_index',
-            "[MANUAL] Potential missing DB index — add \$table->index('field') in your migration");
+        $notes = array_merge($notes,
+            $note('n_plus_one',         'N+1 query — add ->with([\'relation\']) before ->get() to eager load in a single JOIN'),
+            $note('select_all',         'Model::all() — replace with Model::paginate(25) or add a ->where() scope to limit results'),
+            $note('inefficient_count',  'count(Model::all()) — replace with Model::count() (runs COUNT(*), no memory overhead)'),
+            $note('missing_cache',      'Complex query — wrap in Cache::remember(\'key\', 3600, fn() => ...) to avoid repeated DB hits'),
+            $note('missing_index',      'Potential missing DB index — add $table->index(\'field\') in a new migration'),
+            $note('memory_usage',       'Bulk loop over ::all() — replace with Model::chunk(500, fn($batch) => ...) to avoid OOM'),
+        );
 
         // Tech debt
-        $notes += $this->manualNote($findingsByCategory, 'large_class',
-            '[MANUAL] Large class — split into focused classes by responsibility');
-        $notes += $this->manualNote($findingsByCategory, 'high_complexity',
-            '[MANUAL] High cyclomatic complexity — break method into smaller focused methods');
-        $notes += $this->manualNote($findingsByCategory, 'deep_nesting',
-            '[MANUAL] Deep nesting — use early returns (guard clauses) to flatten logic');
-        $notes += $this->manualNoteCounted($findingsByCategory, 'missing_types',
-            fn(int $n) => "[MANUAL] Missing return type declarations — add PHP 8.1 types to {$n} method(s)");
-        $notes += $this->manualNote($findingsByCategory, 'magic_numbers',
-            '[MANUAL] Magic numbers — extract to named constants (const MAX_ATTEMPTS = 5)');
-        $notes += $this->manualNoteCounted($findingsByCategory, 'todo_debt',
-            fn(int $n) => "[MANUAL] {$n} TODO/FIXME comment(s) — create tickets and resolve before release");
-        $notes += $this->manualNote($findingsByCategory, 'dead_code',
-            '[MANUAL] Commented-out dead code — delete it (git history preserves it)');
-        $notes += $this->manualNote($findingsByCategory, 'duplication',
-            '[MANUAL] Duplicated code block — extract to a shared Trait, Service, or Base class');
+        $notes = array_merge($notes,
+            $note('large_class',     'Large class — split by responsibility (SRP); aim for < 200 lines per class'),
+            $note('high_complexity', 'High complexity — break method into smaller focused methods; aim for < 10 branches'),
+            $note('deep_nesting',    'Deep nesting — use early returns (guard clauses) to flatten logic: if (!$x) return; ...'),
+            $note('missing_types',   'Missing return types — add PHP 8.1 types: bool for is*/has*, void for handlers, int for counts'),
+            $note('magic_numbers',   'Magic numbers — extract to named constants: const MAX_ATTEMPTS = 5; const PAGE_SIZE = 25;'),
+            $note('dead_code',       'Commented-out code — delete it; git history preserves every deleted line'),
+            $note('duplication',     'Duplicated block — extract to a shared Trait, Service, or Base class'),
+        );
 
-        // Unknown / catch-all
-        foreach ($findingsByCategory as $cat => $finding) {
-            // Already handled above — skip
-            $knownCats = [
-                'mass_assignment','debug_code','select_all','n_plus_one','eager_loading',
-                'inefficient_count','memory_usage','sql_injection',
-                'fat_controller','service_layer','solid','fat_model','dependency_injection',
-                'secret_exposure','authorization','xss','insecure_upload',
-                'missing_cache','missing_index',
-                'large_class','high_complexity','deep_nesting','missing_types',
-                'magic_numbers','todo_debt','dead_code','duplication',
-            ];
+        if (isset($singleByCategory['todo_debt'])) {
+            $count = $singleByCategory['todo_debt']['_count'] ?? 1;
+            $notes[] = "[MANUAL] {$count} TODO/FIXME comment(s) — create tickets for each and remove the comment when resolved";
+        }
+
+        // Catch-all for unknown categories
+        $knownCats = [
+            'mass_assignment','debug_code','select_all','n_plus_one','eager_loading',
+            'inefficient_count','memory_usage','sql_injection','fat_controller',
+            'service_layer','solid','fat_model','dependency_injection','secret_exposure',
+            'authorization','xss','insecure_upload','missing_cache','missing_index',
+            'large_class','high_complexity','deep_nesting','missing_types','magic_numbers',
+            'todo_debt','dead_code','duplication','long_method',
+        ];
+        foreach ($singleByCategory as $cat => $finding) {
             if (in_array($cat, $knownCats, true)) {
                 continue;
             }
             $label   = ucwords(str_replace('_', ' ', $cat));
-            $rec     = $finding['recommendation'] ?? "Review and fix {$label} manually.";
+            $rec     = $finding['recommendation'] ?? "Review and refactor {$label}.";
             $notes[] = "[MANUAL] {$label}: {$rec}";
         }
 
         return $notes;
     }
 
-    /** Return a [MANUAL] note for $cat if it's in $findingsByCategory, else []. */
-    private function manualNote(array $findingsByCategory, string $cat, string $message): array
-    {
-        return isset($findingsByCategory[$cat]) ? [$message] : [];
-    }
-
-    /** Like manualNote but the message is built from the count of findings for that category. */
-    private function manualNoteCounted(array $findingsByCategory, string $cat, callable $messageFn): array
-    {
-        if (! isset($findingsByCategory[$cat])) {
-            return [];
-        }
-        // For counted notes we need the raw findings count — the caller passes the deduplicated map
-        // so we just use 1 as the count unless extra context is available via 'count' key
-        $count = $findingsByCategory[$cat]['_count'] ?? 1;
-        return [$messageFn($count)];
-    }
-
     // ──────────────────────────────────────────────────────────────────────────
-    // Deterministic auto-fix helpers
+    // Auto-fix helpers — each returns [modifiedContent, bool $changed]
     // ──────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Apply a regex replacement safely.
-     * Returns null on PCRE error — callers MUST check before writing to disk.
-     */
     private function safeReplace(string $pattern, string $replacement, string $content): ?string
     {
         $result = preg_replace($pattern, $replacement, $content);
         return ($result === null) ? null : $result;
     }
 
-
-    /**
-     * Insert a // CODEGUARDIAN-FIX: comment block directly above the target line.
-     * Preserves indentation; does NOT change any executable code.
-     *
-     * @return array{0: string, 1: bool}
-     */
-    private function insertInlineFixComment(string $content, int $lineNumber, string $message): array
-    {
-        if ($lineNumber <= 0) {
-            return [$content, false];
-        }
-
-        $lines = explode("\n", $content);
-        $idx   = $lineNumber - 1; // 0-based
-
-        if (! isset($lines[$idx])) {
-            return [$content, false];
-        }
-
-        preg_match('/^(\s*)/', $lines[$idx], $m);
-        $indent = $m[1] ?? '';
-
-        $commentLines = array_map(
-            fn($l) => $indent . '// CODEGUARDIAN-FIX: ' . $l,
-            explode("\n", $message)
-        );
-
-        array_splice($lines, $idx, 0, $commentLines);
-
-        return [implode("\n", $lines), true];
-    }
-
-    /**
-     * Replace $request->all() with $request->validated() in the three safe contexts:
-     *   Model::create($request->all())          → Model::create($request->validated())
-     *   $model->update($request->all())         → $model->update($request->validated())
-     *   $model->fill($request->all())           → $model->fill($request->validated())
-     *
-     * Patterns are written to FULLY match the $request->all() call INCLUDING its closing
-     * parenthesis, then replace the entire expression so no dangling '(' is left behind.
-     *
-     * Edge cases handled:
-     *   - Whitespace between tokens (e.g. create( $request -> all() ))
-     *   - Extra arguments after $request->all() for ->update()
-     *     e.g. ->update($request->all(), ['timestamps' => false])
-     *     → ->update($request->validated(), ['timestamps' => false])
-     *
-     * @return array{0: string, 1: bool}
-     */
+    /** $request->all() → $request->validated() in create/update/fill calls */
     private function fixMassAssignment(string $content): array
     {
-        // Pattern explanation:
-        //   ::create\s*\(         — matches ::create(
-        //   \s*\$request\s*->\s*  — $request ->
-        //   all\s*\(\s*\)         — all()
-        //   \s*\)                 — the closing ) of create()
-        //
-        // For ->update and ->fill we DON'T match the outer closing ')' because
-        // there may be additional arguments after $request->all().
-        // Instead we only replace $request->all() → $request->validated() on those lines.
-
         $patterns = [
-            // ::create($request->all()) — replace entire expression
             '/::create\s*\(\s*\$request\s*->\s*all\s*\(\s*\)\s*\)/' => '::create($request->validated())',
-
-            // ->update($request->all()  — replace only $request->all() part, preserve rest of args
-            '/->update\s*\(\s*\$request\s*->\s*all\s*\(\s*\)/' => '->update($request->validated()',
-
-            // ->fill($request->all()) — replace entire expression
-            '/->fill\s*\(\s*\$request\s*->\s*all\s*\(\s*\)\s*\)/' => '->fill($request->validated())',
+            '/->update\s*\(\s*\$request\s*->\s*all\s*\(\s*\)/'       => '->update($request->validated()',
+            '/->fill\s*\(\s*\$request\s*->\s*all\s*\(\s*\)\s*\)/'    => '->fill($request->validated())',
         ];
 
         $changed = false;
@@ -522,7 +509,7 @@ class StaticOrchestrator
         return [$content, $changed];
     }
 
-    /** @return array{0: string, 1: bool} */
+    /** Remove dd/dump/var_dump/print_r statements */
     private function removeDebugCode(string $content): array
     {
         $patterns = [
@@ -543,12 +530,359 @@ class StaticOrchestrator
 
         if ($changed) {
             $cleaned = $this->safeReplace("/\n{3,}/", "\n\n", $content);
-            if ($cleaned !== null) {
-                $content = $cleaned;
-            }
+            $content = $cleaned ?? $content;
         }
 
         return [$content, $changed];
+    }
+
+    /**
+     * Parameterize raw DB queries:
+     *   DB::select("SELECT * FROM users WHERE id = $id")
+     *   → DB::select("SELECT * FROM users WHERE id = ?", [$id])
+     */
+    private function fixSqlInjection(string $content): array
+    {
+        $changed = false;
+
+        $result = preg_replace_callback(
+            '/\b(DB::(?:select|statement|update|delete|insert|affectingStatement))\s*\(\s*"([^"]*\$\{?\w+\}?[^"]*)"\s*\)/',
+            function (array $m) use (&$changed): string {
+                $method = $m[1];
+                $query  = $m[2];
+
+                preg_match_all('/\$\{?(\w+)\}?/', $query, $varMatches);
+                $vars = $varMatches[1] ?? [];
+                if (empty($vars)) {
+                    return $m[0];
+                }
+
+                $paramQuery = preg_replace('/\$\{?\w+\}?/', '?', $query) ?? $query;
+                $bindings   = implode(', $', $vars);
+
+                $changed = true;
+                return "{$method}(\"{$paramQuery}\", [\${$bindings}])";
+            },
+            $content
+        );
+
+        if ($result === null) {
+            return [$content, false];
+        }
+
+        return [$result, $changed];
+    }
+
+    /**
+     * XSS: {!! $var !!} → {{ $var }} in Blade templates.
+     * Only replaces simple variable output — does NOT touch expressions
+     * with explicit e() or htmlspecialchars() wrappers.
+     */
+    private function fixXss(string $content): array
+    {
+        // Replace {!! $var !!}, {!! $obj->prop !!}, {!! $arr['key'] !!}
+        $result = preg_replace(
+            '/\{!!\s*(\$[\w\->\[\]\'\"\.]+(?:\(\))?)\s*!!\}/',
+            '{{ $1 }}',
+            $content
+        );
+
+        if ($result === null || $result === $content) {
+            return [$content, false];
+        }
+
+        return [$result, true];
+    }
+
+    /**
+     * Hardcoded secrets → env() references.
+     * Matches common variable names: $password, $secret, $apiKey, $token, $key.
+     * Replaces the literal value with env('VARNAME') and appends a TODO comment.
+     */
+    private function fixHardcodedSecrets(string $content): array
+    {
+        $changed = false;
+
+        $result = preg_replace_callback(
+            '/\$(password|secret|api_key|apikey|api_secret|token|auth_key|private_key)\s*=\s*([\'"])([^\'"]{4,})\2/i',
+            function (array $m) use (&$changed): string {
+                $var    = $m[1];
+                $envKey = 'APP_' . strtoupper(preg_replace('/([A-Z])/', '_$1', $var));
+                $changed = true;
+                return "\${$var} = env('{$envKey}') /* TODO: add {$envKey}=... to your .env file */";
+            },
+            $content
+        );
+
+        if ($result === null) {
+            return [$content, false];
+        }
+
+        return [$result, $changed];
+    }
+
+    /**
+     * Model::all() → Model::paginate(25).
+     * Skips calls immediately chained with collection-only methods to avoid
+     * breaking callers that expect a Collection not a LengthAwarePaginator.
+     */
+    private function fixSelectAll(string $content): array
+    {
+        $unsafeChains = 'first|last|count|isEmpty|isNotEmpty|sum|avg|min|max'
+            . '|pluck|toArray|toJson|flatten|chunk|slice|splice|forget|sortBy|unique|groupBy|keyBy';
+
+        $changed = false;
+
+        $result = preg_replace_callback(
+            '/([A-Z]\w+)::all\s*\(\s*\)/',
+            function (array $m) use ($content, $unsafeChains, &$changed): string {
+                // Look at what follows this call in the source
+                $pos   = strpos($content, $m[0]);
+                $after = ($pos !== false) ? substr($content, $pos + strlen($m[0]), 60) : '';
+                if (preg_match('/^\s*->(?:' . $unsafeChains . ')\s*\(/', $after)) {
+                    return $m[0]; // unsafe chain — leave alone
+                }
+                $changed = true;
+                return $m[1] . '::paginate(25)';
+            },
+            $content
+        );
+
+        if ($result === null) {
+            return [$content, false];
+        }
+
+        return [$result, $changed];
+    }
+
+    /**
+     * N+1: add ->with('relation') before ->get() / ->all() calls.
+     * The relationship name is extracted from the finding's code_snippet,
+     * e.g. "$order->user->name" → 'user'.
+     */
+    private function fixNPlusOne(string $content, array $finding): array
+    {
+        $snippet = $finding['code_snippet'] ?? '';
+        preg_match('/\$\w+->(\w+)->\w+/', $snippet, $m);
+        $relation = $m[1] ?? null;
+
+        if ($relation === null || in_array($relation, ['id', 'created_at', 'updated_at', 'deleted_at'], true)) {
+            return [$content, false];
+        }
+
+        $changed = false;
+        $result  = preg_replace_callback(
+            '/(->\s*(?:get|all)\s*\(\s*\))/',
+            function (array $m) use ($relation, &$changed): string {
+                // Only add with() once per relationship
+                $changed = true;
+                return "->with('{$relation}'){$m[1]}";
+            },
+            $content,
+            1  // limit to first occurrence
+        );
+
+        if ($result === null) {
+            return [$content, false];
+        }
+
+        return [$result, $changed];
+    }
+
+    /**
+     * Missing authorization: insert $this->authorize() stubs in store/update/destroy
+     * methods that have no authorization check.
+     */
+    private function fixMissingAuthorization(string $content): array
+    {
+        $changed = false;
+
+        $result = preg_replace_callback(
+            '/public\s+function\s+(store|update|destroy)\s*\(([^)]*)\)\s*\{(?![\s\S]{0,200}\$this->authorize)/m',
+            function (array $m) use (&$changed): string {
+                $ability = match ($m[1]) {
+                    'store'   => 'create',
+                    'update'  => 'update',
+                    'destroy' => 'delete',
+                    default   => $m[1],
+                };
+                $changed = true;
+                // Preserve indentation from the opening brace line
+                return "public function {$m[1]}({$m[2]})\n    {\n        \$this->authorize('{$ability}'); // TODO: pass the model instance e.g. authorize('{$ability}', \$model)";
+            },
+            $content
+        );
+
+        if ($result === null) {
+            return [$content, false];
+        }
+
+        return [$result, $changed];
+    }
+
+    /**
+     * Inefficient count:
+     *   count(Model::all())    → Model::count()
+     *   count($query->get())   → $query->count()
+     */
+    private function fixInefficientCount(string $content): array
+    {
+        $changed = false;
+
+        // count(Model::all()) → Model::count()
+        $r1 = preg_replace_callback(
+            '/count\s*\(\s*([A-Z]\w+)::all\s*\(\s*\)\s*\)/',
+            function (array $m) use (&$changed): string {
+                $changed = true;
+                return $m[1] . '::count()';
+            },
+            $content
+        );
+        if ($r1 !== null) {
+            $content = $r1;
+        }
+
+        // count($var->get()) → $var->count()
+        $r2 = preg_replace_callback(
+            '/count\s*\(\s*(\$\w+(?:->\w+\(\))*)->get\s*\(\s*\)\s*\)/',
+            function (array $m) use (&$changed): string {
+                $changed = true;
+                return $m[1] . '->count()';
+            },
+            $content
+        );
+        if ($r2 !== null) {
+            $content = $r2;
+        }
+
+        return [$content, $changed];
+    }
+
+    /**
+     * Add PHP 8.1 return type declarations to public/protected methods with
+     * inferable types (bool for is* / has*, void for handle/register/setUp).
+     * Methods already typed or with complex/ambiguous return types are skipped.
+     */
+    private function fixMissingReturnTypes(string $content): array
+    {
+        $changed = false;
+
+        $result = preg_replace_callback(
+            '/(public|protected)\s+function\s+(\w+)\s*\(([^)]*)\)\s*(?!:)\s*\{/',
+            function (array $m) use (&$changed): string {
+                $visibility = $m[1];
+                $name       = $m[2];
+                $params     = $m[3];
+
+                // Skip constructors, magic methods, and test methods
+                if (str_starts_with($name, '__')
+                    || str_starts_with($name, 'test')
+                    || str_starts_with($name, 'it_')) {
+                    return $m[0];
+                }
+
+                $type = $this->inferReturnType($name);
+                if ($type === null) {
+                    return $m[0];
+                }
+
+                $changed = true;
+                return "{$visibility} function {$name}({$params}): {$type} {";
+            },
+            $content
+        );
+
+        if ($result === null) {
+            return [$content, false];
+        }
+
+        return [$result, $changed];
+    }
+
+    /** Infer a PHP return type from a method name. Returns null when ambiguous. */
+    private function inferReturnType(string $name): ?string
+    {
+        $lc = strtolower($name);
+
+        if (preg_match('/^(is|has|can|should|was|will|did|allows|needs)\w*/i', $name)) {
+            return 'bool';
+        }
+        if (in_array($lc, ['handle', 'register', 'boot', 'setup', 'teardown', 'run', 'execute', 'fire'], true)) {
+            return 'void';
+        }
+        if (preg_match('/^(count|total|sum|size|length)\w*/i', $name)) {
+            return 'int';
+        }
+        if (preg_match('/^(toString|render|toHtml|format)\w*/i', $name)) {
+            return 'string';
+        }
+
+        return null; // too ambiguous — don't add a wrong type
+    }
+
+    /**
+     * Extract inline $request->validate([...]) into a FormRequest class.
+     * Returns [$updatedControllerContent, ['path'=>..., 'content'=>...], $className]
+     * or null if no extractable validation block is found.
+     */
+    private function generateFormRequest(string $content, string $filePath): ?array
+    {
+        // Find a $request->validate([...]) block
+        if (! preg_match(
+            '/(\$\w+\s*=\s*)?\$request->validate\s*\(\s*(\[[^\]]{20,}\])\s*\)/s',
+            $content,
+            $m,
+            PREG_OFFSET_CAPTURE
+        )) {
+            return null;
+        }
+
+        $rulesArray = $m[2][0];
+        $fullMatch  = $m[0][0];
+
+        // Derive class name from controller file name
+        $baseName    = basename($filePath, '.php');
+        $baseName    = preg_replace('/Controller$/', '', $baseName) ?? $baseName;
+        $className   = $baseName . 'Request';
+        $namespace   = 'App\\Http\\Requests';
+        $requestPath = 'app/Http/Requests/' . $className . '.php';
+
+        $requestContent = <<<PHP
+        <?php
+
+        declare(strict_types=1);
+
+        namespace {$namespace};
+
+        use Illuminate\Foundation\Http\FormRequest;
+
+        class {$className} extends FormRequest
+        {
+            public function authorize(): bool
+            {
+                return true; // TODO: add authorization logic
+            }
+
+            public function rules(): array
+            {
+                return {$rulesArray};
+            }
+        }
+        PHP;
+
+        // Replace the validate() call in the controller with the FormRequest type-hint
+        // (update the method signature and remove the inline validate call)
+        $updatedContent = str_replace(
+            $fullMatch,
+            '$request->validated() /* validation moved to ' . $className . ' — update method signature to ' . $className . ' $request */',
+            $content
+        );
+
+        return [
+            $updatedContent,
+            ['path' => $requestPath, 'content' => $requestContent],
+            $className,
+        ];
     }
 
     // ──────────────────────────────────────────────────────────────────────────
