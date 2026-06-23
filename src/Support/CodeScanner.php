@@ -295,10 +295,28 @@ class CodeScanner
     }
 
     /**
-     * Search for controller files whose file path contains any of the given keywords.
-     * Restricted to Http/Controllers and Modules directories.
+     * Infrastructure directories that should never appear in API request-handler scope.
+     * Files inside these directories are framework plumbing, not request handlers.
+     */
+    private const INFRASTRUCTURE_DIRS = [
+        '/Providers/', '/Middleware/', '/Console/', '/Exceptions/',
+        '/Broadcasting/', '/Listeners/', '/Events/', '/Jobs/',
+        '/Mail/', '/Notifications/', '/Policies/', '/Rules/',
+        '/Observers/', '/Casts/', '/Scopes/',
+    ];
+
+    /**
+     * Search for controller/action files relevant to a given API filter.
      *
-     * @param  string[] $keywords
+     * Matching is intentionally tight:
+     *   - Infrastructure directories are always excluded (Providers, Middleware, etc.)
+     *   - Only files that look like request handlers are candidates
+     *     (path contains /Controller or filename ends with Controller/Action/Handler)
+     *   - Keywords are matched against the FILE NAME only, not the full path.
+     *     This prevents RegisterController from matching the filter "v1/auth/login"
+     *     just because it lives in an /Auth/ directory.
+     *
+     * @param  string[] $keywords  e.g. ['auth', 'login'] from 'v1/auth/login'
      * @return array<string, string>  [ 'relative/path.php' => 'file contents' ]
      */
     private function findControllersByUriKeywords(string $projectRoot, array $keywords): array
@@ -321,27 +339,41 @@ class CodeScanner
                     continue;
                 }
 
-                // Only scan files that look like controllers (in a Controllers directory
-                // or with Controller/Action/Handler suffix in the filename)
                 $pathname = str_replace('\\', '/', $file->getPathname());
-                // SplFileInfo has no getFilenameWithoutExtension() — use pathinfo()
+
+                // Skip infrastructure files — they handle framework concerns, not HTTP requests
+                $isInfrastructure = false;
+                foreach (self::INFRASTRUCTURE_DIRS as $infraDir) {
+                    if (str_contains($pathname, $infraDir)) {
+                        $isInfrastructure = true;
+                        break;
+                    }
+                }
+                if ($isInfrastructure) {
+                    continue;
+                }
+
+                // Must look like a request handler (path or filename signals it)
                 $filename = pathinfo($file->getFilename(), PATHINFO_FILENAME);
 
-                $isControllerPath = str_contains($pathname, '/Controller')
+                $isHandlerPath = str_contains($pathname, '/Controller')
                     || str_contains($pathname, '/Actions/')
                     || str_contains($pathname, '/Handlers/')
                     || str_ends_with($filename, 'Controller')
                     || str_ends_with($filename, 'Action')
                     || str_ends_with($filename, 'Handler');
 
-                if (! $isControllerPath) {
+                if (! $isHandlerPath) {
                     continue;
                 }
 
-                // Match if any keyword appears in the lowercase file path
-                $lowerPath = strtolower($pathname);
+                // Match keywords against the FILE NAME only — never the directory path.
+                // Example: RegisterController.php lives in /Auth/ but its FILENAME does
+                // not contain "auth" or "login", so it correctly does NOT match
+                // the filter "v1/auth/login". LoginController.php DOES contain "login".
+                $lowerFilename = strtolower($filename);
                 foreach ($keywords as $keyword) {
-                    if (str_contains($lowerPath, strtolower($keyword))) {
+                    if (str_contains($lowerFilename, strtolower($keyword))) {
                         $relPath = ltrim(str_replace($projectRoot, '', $file->getPathname()), '/');
                         if ($file->getSize() <= $this->maxFileSize) {
                             $files[$relPath] = file_get_contents($file->getPathname());

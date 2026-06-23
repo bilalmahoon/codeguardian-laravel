@@ -100,6 +100,13 @@ class RefactorCommand extends Command
         $this->info("  Scope   : {$scope['label']}");
         $this->info("  Files   : {$context['summary']['total_files']}");
 
+        // Show which files are in scope so the user can confirm it's the right set
+        if (! empty($context['summary']['file_list'])) {
+            foreach ($context['summary']['file_list'] as $f) {
+                $this->line("            → {$f}");
+            }
+        }
+
         if ($this->aiEnabled) {
             $provider = config('codeguardian.provider', 'claude');
             $model    = config("codeguardian.{$provider}.model", '');

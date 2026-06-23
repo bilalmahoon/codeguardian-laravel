@@ -71,7 +71,7 @@ class CodeScannerTest extends TestCase
         Route::post('/v1/auth/login', 'UnresolvableController@login');
         PHP);
 
-        // But a LoginController exists in the Controllers/Auth directory
+        // LoginController exists — keyword "login" must match its FILENAME
         file_put_contents(
             $this->tmpDir . '/app/Http/Controllers/Auth/LoginController.php',
             '<?php namespace App\Http\Controllers\Auth; class LoginController { public function __invoke() {} }'
@@ -83,9 +83,67 @@ class CodeScannerTest extends TestCase
 
         $paths = array_keys($context['files']);
         $this->assertTrue(
-            (bool) array_filter($paths, fn($p) => str_contains(strtolower($p), 'login')),
-            'Fallback must return a file whose path contains "login"'
+            (bool) array_filter($paths, fn($p) => str_contains(strtolower(basename($p)), 'login')),
+            'Fallback must return LoginController — keyword matched against filename, not directory'
         );
+    }
+
+    public function test_buildContextForApi_excludes_register_controller_when_searching_login(): void
+    {
+        // RegisterController lives in Auth/ directory — path contains "auth"
+        // but the FILENAME does NOT contain "auth" or "login".
+        // The old (buggy) code matched on path → false positive.
+        // The new code matches on filename only → correctly excluded.
+
+        file_put_contents($this->tmpDir . '/routes/api.php', <<<'PHP'
+        <?php
+        Route::post('/v1/auth/login', 'UnresolvableController@login');
+        PHP);
+
+        file_put_contents(
+            $this->tmpDir . '/app/Http/Controllers/Auth/RegisterController.php',
+            '<?php class RegisterController {}'
+        );
+        file_put_contents(
+            $this->tmpDir . '/app/Http/Controllers/Auth/LoginController.php',
+            '<?php class LoginController {}'
+        );
+
+        $context = $this->scanner->buildContextForApi($this->tmpDir, 'v1/auth/login');
+
+        $paths = array_keys($context['files']);
+
+        $hasRegister = (bool) array_filter($paths, fn($p) => str_contains(basename($p), 'Register'));
+        $this->assertFalse($hasRegister, 'RegisterController must NOT be included — filename has no keyword match');
+
+        $hasLogin = (bool) array_filter($paths, fn($p) => str_contains(basename($p), 'Login'));
+        $this->assertTrue($hasLogin, 'LoginController must be included — filename matches keyword "login"');
+    }
+
+    public function test_buildContextForApi_excludes_providers_from_scope(): void
+    {
+        mkdir($this->tmpDir . '/app/Providers', 0755, true);
+
+        file_put_contents($this->tmpDir . '/routes/api.php', <<<'PHP'
+        <?php
+        Route::post('/v1/auth/login', 'UnresolvableController@login');
+        PHP);
+
+        // RouteServiceProvider is in /Providers/ — must be excluded as infrastructure
+        file_put_contents(
+            $this->tmpDir . '/app/Providers/RouteServiceProvider.php',
+            '<?php class RouteServiceProvider {}'
+        );
+        file_put_contents(
+            $this->tmpDir . '/app/Http/Controllers/Auth/LoginController.php',
+            '<?php class LoginController {}'
+        );
+
+        $context = $this->scanner->buildContextForApi($this->tmpDir, 'v1/auth/login');
+
+        $paths = array_keys($context['files']);
+        $hasProvider = (bool) array_filter($paths, fn($p) => str_contains($p, 'Provider'));
+        $this->assertFalse($hasProvider, 'Providers/ directory must be excluded from API scope');
     }
 
     public function test_buildContextForApi_throws_when_no_routes_match(): void
@@ -164,23 +222,25 @@ class CodeScannerTest extends TestCase
         Route::post('/api/v2/users/profile', 'UnresolvableController@update');
         PHP);
 
-        // Controller with "users" in path — should be found via keyword "users" or "profile"
+        // ProfileController — filename matches keyword "profile"
         file_put_contents(
             $this->tmpDir . '/app/Http/Controllers/Users/ProfileController.php',
             '<?php namespace App\Http\Controllers\Users; class ProfileController {}'
         );
 
-        // Should NOT create a file named "v2Controller.php" or "apiController.php"
         $context = $this->scanner->buildContextForApi($this->tmpDir, 'api/v2/users/profile');
+        $paths   = array_keys($context['files']);
 
-        $paths = array_keys($context['files']);
+        // Version segments "v2" and "api" must NOT drive filename keyword matching
         foreach ($paths as $path) {
-            $this->assertStringNotContainsString('v2', basename($path),
-                'Version segment "v2" must not drive keyword matching');
-            $this->assertStringNotContainsString('apiController', basename($path),
-                '"api" segment must not drive keyword matching');
+            $base = strtolower(basename($path, '.php'));
+            $this->assertStringNotContainsString('v2', $base,
+                'Version segment "v2" must not drive filename keyword matching');
         }
-        $this->assertNotEmpty($context['files'], 'ProfileController must be found via "users" or "profile" keyword');
+
+        // ProfileController must be found because "profile" is in its filename
+        $hasProfile = (bool) array_filter($paths, fn($p) => str_contains(strtolower(basename($p)), 'profile'));
+        $this->assertTrue($hasProfile, 'ProfileController must be found via "profile" keyword in filename');
     }
 
     // ─── getFilenameWithoutExtension fix (regression) ─────────────────────────
