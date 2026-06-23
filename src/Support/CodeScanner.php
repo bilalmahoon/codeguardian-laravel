@@ -151,11 +151,13 @@ class CodeScanner
             }
         }
 
-        // Fallback: one or more routes couldn't be resolved from the route definition.
-        // Run regardless of whether some files were already found — a partially-unresolved
-        // scope (e.g. login + profile routes where only profile resolved) is still wrong.
-        // Search for controller files whose path contains meaningful URI segment keywords.
-        if ($hasUnresolved) {
+        // Fallback: run ONLY when direct route resolution found zero files.
+        // If even one file was resolved directly (e.g. APIAuthController found via route
+        // definition), we trust that result and skip the keyword search entirely.
+        // Running the fallback on a partially-resolved scope adds noise:
+        //   "login" would also match LoginController, AuthController, etc., even though
+        //   the real handler was already found.
+        if (empty($files) && $hasUnresolved) {
             $keywords = $this->extractUriKeywords($apiFilter);
             if (! empty($keywords)) {
                 // array_merge with $files last so directly-resolved controllers take precedence
@@ -257,20 +259,80 @@ class CodeScanner
     }
 
     /**
-     * Find service/repository files referenced in controller files.
+     * Find service/repository files referenced by the given source files.
+     *
+     * Three detection strategies (applied in order, results merged):
+     *   1. `use` statement: `use App\Services\AuthService;`
+     *   2. Constructor parameter type-hint: `public function __construct(AuthService $svc)`
+     *   3. Method parameter type-hint: `public function foo(UserRepository $repo)`
+     *
+     * One level of recursion: after finding direct dependencies of the controllers,
+     * the same search runs on each service/repository file so that
+     *   Controller → Service → Repository
+     * is all pulled into scope automatically.
      */
-    private function findRelatedServices(string $projectRoot, array $controllerFiles): array
+    private function findRelatedServices(string $projectRoot, array $sourceFiles, int $depth = 0): array
     {
-        $serviceFiles = [];
+        // Stop after two hops (Controller → Service → Repository) to avoid runaway scanning.
+        if ($depth > 1) {
+            return [];
+        }
 
-        foreach ($controllerFiles as $content) {
-            // Find injected class names from constructor or method signatures
-            preg_match_all('/use\s+([A-Za-z\\\\]+(?:Service|Repository|Manager)[A-Za-z]*)\s*;/', $content, $m);
-            foreach ($m[1] as $className) {
-                $shortName = class_basename(str_replace('\\', '/', $className));
-                $file      = $this->findFileByClassName($projectRoot, $shortName);
-                if ($file) {
+        $serviceFiles = [];
+        $alreadyFound = array_keys($sourceFiles);
+
+        foreach ($sourceFiles as $content) {
+            $classNames = [];
+
+            // 1. Fully-qualified `use` statements with a service-like suffix
+            preg_match_all(
+                '/use\s+([A-Za-z\\\\]+(?:Service|Repository|Manager|Contract|Interface)[A-Za-z]*)\s*;/',
+                $content,
+                $useMatches
+            );
+            foreach ($useMatches[1] as $fqcn) {
+                $classNames[] = class_basename(str_replace('\\', '/', $fqcn));
+            }
+
+            // 2. Constructor parameter type-hints
+            //    Captures the block between `__construct(` and the closing `)`.
+            if (preg_match('/function\s+__construct\s*\(([^)]*)\)/s', $content, $ctorMatch)) {
+                preg_match_all(
+                    '/\b([A-Za-z][A-Za-z0-9]*(?:Service|Repository|Manager|Contract|Interface))\s+\$/',
+                    $ctorMatch[1],
+                    $paramMatches
+                );
+                foreach ($paramMatches[1] as $shortName) {
+                    $classNames[] = $shortName;
+                }
+            }
+
+            // 3. Regular method parameter type-hints (excluding __construct already done above)
+            preg_match_all(
+                '/function\s+(?!__construct\b)\w+\s*\([^)]*\b([A-Za-z][A-Za-z0-9]*(?:Service|Repository|Manager))\s+\$/',
+                $content,
+                $methodParamMatches
+            );
+            foreach ($methodParamMatches[1] as $shortName) {
+                $classNames[] = $shortName;
+            }
+
+            // Resolve each unique class name to a file on disk
+            foreach (array_unique($classNames) as $shortName) {
+                $file = $this->findFileByClassName($projectRoot, $shortName);
+                if ($file && ! in_array($file, $alreadyFound, true) && ! isset($serviceFiles[$file])) {
                     $serviceFiles[$file] = file_get_contents($projectRoot . '/' . $file);
+                    $alreadyFound[]      = $file;
+                }
+            }
+        }
+
+        // Recurse one level: find what the services themselves depend on
+        if (! empty($serviceFiles)) {
+            $deeper = $this->findRelatedServices($projectRoot, $serviceFiles, $depth + 1);
+            foreach ($deeper as $path => $content) {
+                if (! isset($serviceFiles[$path])) {
+                    $serviceFiles[$path] = $content;
                 }
             }
         }

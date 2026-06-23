@@ -135,10 +135,11 @@ PROMPT;
 
     protected function buildUserPrompt(array $context): string
     {
-        $filePath    = $context['file_path']    ?? 'unknown';
-        $fileContent = $context['file_content'] ?? '';
-        $issues      = $context['issues']       ?? [];
-        $apiRoute    = $context['api_route']    ?? null;
+        $filePath     = $context['file_path']     ?? 'unknown';
+        $fileContent  = $context['file_content']  ?? '';
+        $issues       = $context['issues']        ?? [];
+        $apiRoute     = $context['api_route']     ?? null;
+        $relatedFiles = $context['related_files'] ?? [];
 
         // Build the issues block with full detail
         $issuesBlock = '';
@@ -168,13 +169,53 @@ PROMPT;
             if ($after)   { $issuesBlock .= "After (hint):\n{$after}\n"; }
         }
 
-        $routeContext  = $apiRoute
-            ? "This file handles the API endpoint: {$apiRoute}\n"
+        // Build the related-files context block (services, repositories, etc.)
+        // These are READ-ONLY — Claude must NOT put them in "refactored_file".
+        // Limit to 4 related files, max 4000 chars each, to avoid token blow-out.
+        $relatedBlock = '';
+        if (! empty($relatedFiles)) {
+            // Exclude the file being refactored (it is already shown as FILE above)
+            $filtered = array_filter(
+                $relatedFiles,
+                fn($path) => $path !== $filePath,
+                ARRAY_FILTER_USE_KEY
+            );
+            $count = 0;
+            foreach ($filtered as $relPath => $relContent) {
+                if ($count++ >= 4) {
+                    break;
+                }
+                $snippet = mb_strlen($relContent) > 4000
+                    ? mb_substr($relContent, 0, 4000) . "\n// ... [truncated for brevity]"
+                    : $relContent;
+                $relatedBlock .= "\n### {$relPath}\n{$snippet}\n";
+            }
+        }
+
+        $routeContext = $apiRoute
+            ? "This file is part of the API endpoint: {$apiRoute}\n"
             : '';
 
         $issueIntro = count($issues) > 0
             ? count($issues) . " static analysis finding(s) are listed below. Fix ALL of them, PLUS any additional problems you independently identify that static analysis missed."
-            : "Static analysis found no issues, but perform a full independent expert review. Static analysis misses many real problems — find them.";
+            : "Static analysis found no issues in this file, but perform a full independent expert review. Static analysis misses many real problems — find them.";
+
+        $relatedSection = $relatedBlock !== ''
+            ? <<<SECTION
+
+═══════════════════════════════════════
+ RELATED FILES — READ-ONLY CONTEXT
+ (These show the full call chain. DO NOT include them in "refactored_file".
+  Refactor only the FILE above. Use these to understand the call chain,
+  decide what logic belongs in the service vs controller, and avoid
+  duplicating code that already exists in a service/repository.)
+═══════════════════════════════════════
+{$relatedBlock}
+═══════════════════════════════════════
+ END RELATED FILES
+═══════════════════════════════════════
+SECTION
+            : '';
 
         return <<<PROMPT
 {$routeContext}
@@ -183,21 +224,22 @@ Act as a Principal Software Engineer + Senior QA Engineer.
 Review this as if it serves millions of requests per day and ships to production tomorrow.
 
 ═══════════════════════════════════════
- FILE: {$filePath}
+ FILE TO REFACTOR: {$filePath}
 ═══════════════════════════════════════
 {$fileContent}
 ═══════════════════════════════════════
  END OF FILE
 ═══════════════════════════════════════
-
+{$relatedSection}
 ═══════════════════════════════════════
  STATIC ANALYSIS FINDINGS
 ═══════════════════════════════════════
 {$issuesBlock}
 
-Return the COMPLETE refactored file — every single line.
+Return the COMPLETE refactored FILE TO REFACTOR — every single line.
 Do NOT truncate. Do NOT write "// ... rest unchanged" or any placeholder.
 Every line of the original file must appear in "refactored_file", modified or unmodified.
+Do NOT return the related files in "refactored_file" — only the single file above.
 PROMPT;
     }
 
@@ -208,18 +250,21 @@ PROMPT;
      * @param  string      $fileContent  Current content of the file
      * @param  array       $issues       Issues found for this specific file
      * @param  string|null $apiRoute     Optional API route context (e.g. "v1/auth/login")
+     * @param  array       $relatedFiles Other in-scope files (services, repos) — read-only context
      */
     public function refactorFile(
         string  $filePath,
         string  $fileContent,
         array   $issues,
-        ?string $apiRoute = null
+        ?string $apiRoute = null,
+        array   $relatedFiles = []
     ): array {
         return $this->analyze([
-            'file_path'    => $filePath,
-            'file_content' => $fileContent,
-            'issues'       => $issues,
-            'api_route'    => $apiRoute,
+            'file_path'     => $filePath,
+            'file_content'  => $fileContent,
+            'issues'        => $issues,
+            'api_route'     => $apiRoute,
+            'related_files' => $relatedFiles,
         ]);
     }
 }

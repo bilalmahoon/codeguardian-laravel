@@ -398,11 +398,20 @@ class RefactorCommand extends Command
 
     private function runRefactoring(array $analysisResults, array $context): array
     {
-        $findingsByFile  = $this->groupFindingsByFile($analysisResults['agent_results']);
+        $findingsByFile = $this->groupFindingsByFile($analysisResults['agent_results']);
 
-        if (empty($findingsByFile)) {
+        // When --api= is used and AI is enabled, we MUST NOT bail early even if static
+        // analysis found nothing. The deep-chain pass will run AI on the service/repository
+        // layer regardless. Without --api=, an empty findings list means nothing to do.
+        $hasApiScope = $this->aiEnabled && $this->option('api') && ! empty($context['files']);
+
+        if (empty($findingsByFile) && ! $hasApiScope) {
             $this->warn('  No file-specific findings to refactor.');
             return [];
+        }
+
+        if (empty($findingsByFile)) {
+            $this->line('  ✔  Static analysis: no issues found. Proceeding to AI deep-chain review...');
         }
 
         $refactorResults = [];
@@ -540,7 +549,11 @@ class RefactorCommand extends Command
 
             // ── AI deep-refactoring pass (mode=ai or mode=hybrid) ────────────
             if ($this->aiEnabled) {
-                $aiChanges = $this->applyAiRefactoring($filePath, $fullPath, $issues);
+                // Pass the entire in-scope file set as read-only context so Claude
+                // sees the full call chain (controller → service → repository) and
+                // can make informed decisions about what goes where.
+                $relatedContextFiles = $context['files'] ?? [];
+                $aiChanges = $this->applyAiRefactoring($filePath, $fullPath, $issues, $relatedContextFiles);
             } elseif ($this->aiMode !== 'static') {
                 $this->line('  ⚡ AI provider not configured — static-only mode.');
             }
@@ -617,6 +630,64 @@ class RefactorCommand extends Command
                     $preExisting = count($testResult['failures'] ?? []);
                     if ($preExisting > 0) {
                         $this->line("  ✅  No NEW failures (pre-existing: {$preExisting} ignored).");
+                    }
+                }
+            }
+        }
+
+        // ── API deep-chain pass: AI refactor files that had NO static findings ─
+        // When --api= is specified, the scope includes service/repository files
+        // that were pulled in via findRelatedServices. Static analysis may find
+        // nothing in them (e.g. the service is syntactically clean but has
+        // structural issues only AI detects). Run an AI-only pass on every
+        // in-scope file that was NOT already processed in the main loop above.
+        if ($hasApiScope) {
+            $allContextFiles  = $context['files'];
+            $alreadyProcessed = array_keys($findingsByFile);
+
+            $unprocessed = array_filter(
+                $allContextFiles,
+                fn($relPath) => ! in_array($relPath, $alreadyProcessed, true),
+                ARRAY_FILTER_USE_KEY
+            );
+
+            if (! empty($unprocessed)) {
+                $this->newLine();
+                $this->info('  🔍 API deep-chain: running AI review on service/repository layer...');
+
+                foreach ($unprocessed as $relPath => $_) {
+                    $candidatePath = $projectRealPath . DIRECTORY_SEPARATOR . ltrim($relPath, '/\\');
+                    $fullPath      = realpath($candidatePath) ?: $candidatePath;
+
+                    if (! file_exists($fullPath)) {
+                        continue;
+                    }
+
+                    if (! str_starts_with($fullPath, $projectRealPath)) {
+                        continue;
+                    }
+
+                    $this->newLine();
+                    $this->info("  [service/repo] {$relPath}");
+                    $this->line('  No static findings — running AI-only expert review...');
+
+                    if ($this->backupEnabled) {
+                        $backupFile             = $backupRoot . '/' . str_replace(['/', '\\'], '__', $relPath);
+                        $this->backups[$relPath] = File::get($fullPath);
+                        File::put($backupFile, $this->backups[$relPath]);
+                    }
+
+                    // Pass zero static issues — AI will do its own independent review
+                    $aiChanges = $this->applyAiRefactoring($relPath, $fullPath, [], $allContextFiles);
+
+                    if (! empty($aiChanges)) {
+                        $refactorResults[$relPath] = [
+                            'status'       => 'ai_only',
+                            'issues'       => 0,
+                            'auto_fixed'   => 0,
+                            'manual_todos' => 0,
+                            'changes'      => $aiChanges,
+                        ];
                     }
                 }
             }
@@ -794,8 +865,17 @@ class RefactorCommand extends Command
      *
      * @return list<string>
      */
-    private function applyAiRefactoring(string $filePath, string $fullPath, array $issues): array
-    {
+    /**
+     * @param  array $relatedContextFiles  All in-scope files for this operation (keyed by relative path).
+     *                                     Passed to Claude as read-only context so it understands the
+     *                                     full controller → service → repository call chain.
+     */
+    private function applyAiRefactoring(
+        string $filePath,
+        string $fullPath,
+        array  $issues,
+        array  $relatedContextFiles = []
+    ): array {
         $provider = config('codeguardian.provider', 'claude');
         $this->newLine();
         $this->info("  🤖 Running AI deep-refactoring ({$provider})...");
@@ -823,7 +903,13 @@ class RefactorCommand extends Command
         try {
             $agent     = new RefactorAgent();
             $apiFilter = $this->option('api') ?: null;
-            $result    = $agent->refactorFile($filePath, $currentContent, array_values($relevantIssues), $apiFilter);
+            $result    = $agent->refactorFile(
+                $filePath,
+                $currentContent,
+                array_values($relevantIssues),
+                $apiFilter,
+                $relatedContextFiles
+            );
 
             if (! empty($result['error'])) {
                 $this->warn("  ⚠  AI refactoring error: {$result['error']}");
