@@ -89,7 +89,7 @@ class RouteExtractor
     public function resolveControllerFile(array $route): ?string
     {
         $controller = $route['controller'] ?? null;
-        if (! $controller) {
+        if (! $controller || in_array($controller, ['Closure', 'Unknown', ''], true)) {
             return null;
         }
         $className = explode('@', $controller)[0];
@@ -343,18 +343,34 @@ class RouteExtractor
 
     private function extractController(string $content, int $offset): string
     {
-        $chunk = substr($content, $offset, 400);
+        // Use a 600-char window to handle multi-line route definitions
+        $chunk = substr($content, $offset, 600);
 
+        // Pattern 1: [ClassName::class, 'method']  (most common Laravel 8+)
         if (preg_match('/\[\s*([A-Za-z\\\\]+)::class\s*,\s*[\'"](\w+)[\'"]\s*\]/', $chunk, $m)) {
             $class = class_basename(str_replace('\\', '/', $m[1]));
             return $class . '@' . $m[2];
         }
 
+        // Pattern 2: 'ClassName@method'  (legacy string syntax)
         if (preg_match('/[\'"]([A-Za-z\\\\]+@\w+)[\'"]/', $chunk, $m)) {
             return $m[1];
         }
 
-        if (str_contains(substr($chunk, 0, 80), 'function')) {
+        // Pattern 3: InvokableController::class  (single-action controller, no method)
+        // Matches the second argument being just a class reference, not inside an array.
+        if (preg_match('/Route\s*::\s*\w+\s*\([^,]+,\s*([A-Za-z\\\\]+)::class\s*[,)\n]/', $chunk, $m)) {
+            $class = class_basename(str_replace('\\', '/', $m[1]));
+            return $class . '@__invoke';
+        }
+
+        // Pattern 4: Route::controller(ClassName::class)->group(...) with short method string
+        if (preg_match('/Route\s*::\s*controller\s*\(\s*([A-Za-z\\\\]+)::class\s*\)/', $chunk, $m)) {
+            $class = class_basename(str_replace('\\', '/', $m[1]));
+            return $class . '@(group)';
+        }
+
+        if (str_contains(substr($chunk, 0, 120), 'function')) {
             return 'Closure';
         }
 

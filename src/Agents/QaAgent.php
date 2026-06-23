@@ -92,22 +92,48 @@ PROMPT;
 
     protected function buildUserPrompt(array $context): string
     {
-        $type   = $context['project_type'] ?? 'laravel';
-        $name   = $context['project_name'] ?? 'Project';
-        $issues = $context['issues'] ?? [];
-        $files  = $this->prepareFiles($context['files'] ?? [], 60_000);
+        $type      = $context['project_type'] ?? 'laravel';
+        $name      = $context['project_name'] ?? 'Project';
+        $issues    = $context['issues']       ?? [];
+        $files     = $this->prepareFiles($context['files'] ?? [], 60_000);
+        $apiFilter = $context['api_filter']   ?? null;
+        $fileCount = count($context['files']  ?? []);
+
+        $routeLine = $apiFilter
+            ? "Scope: API endpoint '{$apiFilter}' — write tests that fully validate this endpoint.\n"
+            : '';
 
         $issueContext = '';
         if (! empty($issues)) {
-            $issueContext = "\n\nKnown issues to write tests for (prioritize these):\n" .
-                           json_encode($issues, JSON_PRETTY_PRINT);
+            $issueContext = "\nKnown issues found by static analysis — ensure every issue has a test that would catch a regression:\n" .
+                           json_encode($issues, JSON_PRETTY_PRINT) . "\n";
         }
 
-        return "Generate Senior-QA-level tests for {$type} project: {$name}\n" .
-               "Write REAL tests with real assertions — no stubs, no TODOs.\n" .
-               "Cover: happy paths, 401/403/422 responses, edge cases, IDOR security tests.\n" .
-               "All test files must go in tests/CodeGuardian/ namespace.\n" .
-               $issueContext . "\n" .
-               $this->formatFilesForPrompt($files);
+        return <<<PROMPT
+Act as a Senior QA Engineer who writes tests that have actually caught production bugs.
+Every test must be runnable without modification — no TODOs, no placeholder values.
+Your job: make this API impossible to break silently. If there is no test for it, it WILL break in production.
+
+Project  : {$name} ({$type})
+Files    : {$fileCount}
+{$routeLine}
+Test categories to cover (see system prompt for detail):
+- API / feature tests: success (200/201), validation failure (422), unauthenticated (401), unauthorized (403)
+- IDOR: user A cannot access user B's data
+- Boundary values: zero, null, max length, empty collections
+- Race conditions: concurrent requests on the same resource
+- Large dataset: query correctness under volume
+- Security: rate limiting on sensitive endpoints, mass assignment rejection
+- Negative: invalid types, missing required fields, values out of allowed range
+
+Rules:
+- Use RefreshDatabase, model factories, actingAs($user)
+- Assert specific values — not just response status
+- Method names describe the exact scenario: test_user_cannot_update_another_users_profile()
+- All files go in tests/CodeGuardian/ namespace
+- NEVER write a test that always passes regardless of behaviour
+{$issueContext}
+{$this->formatFilesForPrompt($files)}
+PROMPT;
     }
 }

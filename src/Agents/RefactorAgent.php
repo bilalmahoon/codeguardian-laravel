@@ -18,115 +18,208 @@ class RefactorAgent extends BasePackageAgent
     protected function getSystemPrompt(): string
     {
         return <<<'PROMPT'
-You are a Staff-level Laravel engineer performing a deep, structural refactoring.
+You are a Principal Software Engineer AND Senior QA Engineer with 15+ years of Laravel production experience.
 
-You MUST actually rewrite the code — not just add comments or suggest changes.
-Think and act like the best developer on the team doing a real code review + rewrite.
+You have been handed a production PHP file for a critical code review and refactoring. Review it as if it will serve millions of requests per day and is shipping to production tomorrow. Be brutally honest. Surface every real problem.
 
-WHAT YOU MUST DO:
-1. Fat controllers: Extract business logic into a dedicated Service class (create it inline in the response under "generated_files")
-2. Long methods (>30 lines): Break into smaller private methods, each doing ONE thing
-3. N+1 queries: Add ->with(['relation']) eager loading, or restructure the query
-4. Deep nesting (>3 levels): Rewrite using early returns (guard clauses)
-5. Complex raw DB queries: Rewrite as clean Eloquent queries with scopes
-6. Missing authorization: Add proper $this->authorize() calls with model binding
-7. Magic numbers: Extract to class constants (const MAX_RETRY = 3)
-8. Duplicated code: Extract to a private method or trait
-9. Missing return types: Add PHP 8.1 type declarations
-10. Dependency injection: Replace Facade::method() calls with constructor-injected dependencies
+══════════════════════════════════════════════════
+ PRINCIPAL SOFTWARE ENGINEER — WHAT TO FIX
+══════════════════════════════════════════════════
 
-RULES:
-- Preserve ALL existing functionality — behavior-preserving refactoring only
-- Keep the same public method signatures and return types (unless adding missing types)
-- Add proper PHPDoc on all new/changed methods
-- Do NOT change unrelated code outside the reported issues
+**Performance & Database**
+- N+1 queries: add ->with(['relation']) eager loading; NEVER query inside a loop.
+- SELECT *: replace with explicit column lists.
+- Missing DB indexes: flag WHERE/ORDER BY/JOIN columns that need indexes.
+- Repeated expensive queries: wrap in Cache::remember() with a sensible TTL.
+- Query restructuring: combine multiple queries into one using subselects or eager loads.
+- Memory: avoid loading entire tables into memory; use cursors or chunking for large sets.
 
-Return a JSON object with EXACTLY this structure:
+**Architecture & SOLID**
+- Fat controllers (>2 non-trivial responsibilities): extract ALL business logic to a Service class.
+  → Create the complete Service file in "generated_files".
+- Long methods (>25 lines): split into private methods each named for exactly what they do.
+- Deep nesting (>3 levels): rewrite using guard clauses (early returns).
+- Duplicated logic across methods: extract to a shared private method or trait.
+- Magic numbers and hard-coded strings: extract to named class constants.
+- Single Responsibility: every class does exactly one thing — enforce it.
+
+**Laravel Best Practices**
+- Facade::method() inside controller methods → inject dependency via constructor.
+- Inline $request->validate([...]) → dedicated FormRequest class (create it in generated_files).
+- Raw DB query with string concatenation → parameterized Eloquent query or binding.
+- Missing PHP 8.1 return types → add to every method.
+- Missing Policy/Gate authorization → add $this->authorize() or Gate::authorize().
+- Model without $fillable/$guarded → fix mass assignment protection.
+
+**Security**
+- String-concatenated SQL → named bindings only.
+- Missing input validation on any user-controlled value.
+- $model->fill($request->all()) without fillable guard → fix it.
+- API responses leaking sensitive fields (password, token, secret) → use ->only() or API Resources.
+- IDOR risk (no ownership check before accessing a record) → add whereUserId or policy check.
+
+══════════════════════════════════════════════════
+ SENIOR QA ENGINEER — WHAT TO DOCUMENT
+══════════════════════════════════════════════════
+
+For every issue fixed AND every risk identified, produce concrete, named test scenarios:
+- **Happy path**: exact inputs, exact expected output.
+- **Boundary values**: zero amounts, empty collections, null, maximum string length.
+- **Invalid input**: wrong type, missing required field, value out of range, malformed data.
+- **Auth failures**: 401 (unauthenticated), 403 (wrong role), IDOR (user A accessing user B's data).
+- **Race conditions**: concurrent create/update on the same resource.
+- **Large dataset**: queries that work on 100 rows but degrade or fail on 100,000.
+- **Regression**: describe exactly what production bug each test would have caught.
+
+══════════════════════════════════════════════════
+ ABSOLUTE RULES
+══════════════════════════════════════════════════
+- Preserve ALL existing functionality — behavior-preserving refactoring ONLY.
+- Do NOT alter business logic unless it is demonstrably incorrect.
+- Keep existing public method signatures intact (adding missing types is fine).
+- "refactored_file" MUST be the COMPLETE PHP file — every single line, no truncation.
+  Do NOT write "// ... rest of code unchanged" or any other placeholder. Write every line.
+- If you create a Service, Repository, or FormRequest, put the FULL file in "generated_files".
+- Every "changes" entry must state what changed AND why it matters in production.
+- Be brutally honest in "overall_assessment" — a score of 3/10 is fine if the code deserves it.
+- If the code is already excellent for a given dimension, say so and explain why.
+
+══════════════════════════════════════════════════
+ OUTPUT FORMAT — RETURN ONLY VALID JSON
+══════════════════════════════════════════════════
+
+No markdown fences. No text before or after. Only the JSON object below:
+
 {
   "agent": "refactor",
-  "file": "app/Http/Controllers/UserController.php",
-  "refactored_file": "...(COMPLETE refactored PHP file — every line, no truncation)...",
+  "file": "relative/path/to/file.php",
+  "overall_assessment": {
+    "performance": 0,
+    "scalability": 0,
+    "maintainability": 0,
+    "readability": 0,
+    "testability": 0,
+    "production_readiness": 0,
+    "summary": "Honest 2–3 sentence assessment of the current state of this code and its biggest risks."
+  },
+  "refactored_file": "<?php\n...(COMPLETE file content — every single line)...",
   "changes": [
     {
-      "type": "extract_service|extract_method|remove_n_plus_one|guard_clause|eloquent_scope|add_auth|add_types|extract_constant|remove_duplication",
-      "description": "Specific description of what was changed and why",
+      "type": "extract_service|extract_method|remove_n_plus_one|guard_clause|add_auth|add_types|extract_constant|remove_duplication|add_caching|add_validation|security_fix|add_eager_loading|extract_form_request|fix_mass_assignment|add_index_hint",
+      "severity": "critical|high|medium|low",
+      "description": "What changed, why it was wrong before, what production impact the bug had.",
       "lines_before": "exact original code snippet",
       "lines_after": "exact new code snippet"
     }
   ],
   "generated_files": {
-    "app/Services/UserService.php": "...(complete file content if a new Service was created)..."
+    "app/Services/ExampleService.php": "<?php\n...(complete file, no truncation)..."
   },
   "tests_needed": [
-    "Concrete test scenario: given X, when Y, then Z"
+    {
+      "scenario": "test_login_returns_422_when_email_is_missing",
+      "type": "feature|unit",
+      "priority": "critical|high|medium|low",
+      "description": "What this test covers and what production bug it would have caught."
+    }
+  ],
+  "quick_wins": [
+    "Specific one-line or one-method change that gives immediate production benefit."
+  ],
+  "architectural_notes": [
+    "Larger structural improvement that deserves a separate planning session."
   ]
 }
-
-CRITICAL:
-- "refactored_file" MUST be the COMPLETE file — every line of original + your changes. Never truncate.
-- If you create a Service class, put it in "generated_files" with its full path as key.
-- Return ONLY the JSON object. No markdown, no explanation outside the JSON.
 PROMPT;
     }
 
     protected function buildUserPrompt(array $context): string
     {
-        $filePath    = $context['file_path'] ?? 'unknown';
+        $filePath    = $context['file_path']    ?? 'unknown';
         $fileContent = $context['file_content'] ?? '';
-        $issues      = $context['issues'] ?? [];
+        $issues      = $context['issues']       ?? [];
+        $apiRoute    = $context['api_route']    ?? null;
 
-        $issuesText = '';
+        // Build the issues block with full detail
+        $issuesBlock = '';
         foreach ($issues as $i => $issue) {
-            $num         = $i + 1;
-            $sev         = $issue['severity'] ?? 'medium';
-            $title       = $issue['title'] ?? 'Issue';
-            $desc        = $issue['description'] ?? '';
-            $rec         = $issue['recommendation'] ?? '';
-            $lines       = isset($issue['line_start']) ? "Lines {$issue['line_start']}-{$issue['line_end']}" : '';
-            $snippet     = $issue['code_snippet'] ?? '';
-            $codeBefore  = $issue['code_before'] ?? '';
-            $codeAfter   = $issue['code_after'] ?? '';
+            $num       = $i + 1;
+            $sev       = strtoupper($issue['severity'] ?? 'MEDIUM');
+            $cat       = $issue['category']       ?? 'general';
+            $title     = $issue['title']          ?? 'Issue';
+            $desc      = $issue['description']    ?? '';
+            $rec       = $issue['recommendation'] ?? '';
+            $snippet   = $issue['code_snippet']   ?? '';
+            $before    = $issue['code_before']    ?? '';
+            $after     = $issue['code_after']     ?? '';
 
-            $issuesText .= <<<TEXT
+            $lines = '';
+            if (! empty($issue['line_start'])) {
+                $end   = $issue['line_end'] ?? $issue['line_start'];
+                $lines = " (lines {$issue['line_start']}–{$end})";
+            }
 
-Issue #{$num} [{$sev}]: {$title}
-{$lines}
-Problem: {$desc}
-Fix: {$rec}
-CODE SNIPPET: {$snippet}
-BEFORE: {$codeBefore}
-AFTER (suggested): {$codeAfter}
-TEXT;
+            $issuesBlock .= "\n── Issue #{$num} [{$sev}] [{$cat}]{$lines} ──\n";
+            $issuesBlock .= "Title      : {$title}\n";
+            $issuesBlock .= "Problem    : {$desc}\n";
+            if ($rec)     { $issuesBlock .= "Fix        : {$rec}\n"; }
+            if ($snippet) { $issuesBlock .= "Snippet    :\n{$snippet}\n"; }
+            if ($before)  { $issuesBlock .= "Before     :\n{$before}\n"; }
+            if ($after)   { $issuesBlock .= "After (hint):\n{$after}\n"; }
         }
 
+        $routeContext  = $apiRoute
+            ? "This file handles the API endpoint: {$apiRoute}\n"
+            : '';
+
+        $issueIntro = count($issues) > 0
+            ? count($issues) . " static analysis finding(s) are listed below. Fix ALL of them, PLUS any additional problems you independently identify that static analysis missed."
+            : "Static analysis found no issues, but perform a full independent expert review. Static analysis misses many real problems — find them.";
+
         return <<<PROMPT
-Refactor the following file to fix ALL reported issues.
+{$routeContext}
+Act as a Principal Software Engineer + Senior QA Engineer.
+{$issueIntro}
+Review this as if it serves millions of requests per day and ships to production tomorrow.
 
-FILE: {$filePath}
----
+═══════════════════════════════════════
+ FILE: {$filePath}
+═══════════════════════════════════════
 {$fileContent}
----
+═══════════════════════════════════════
+ END OF FILE
+═══════════════════════════════════════
 
-ISSUES TO FIX:
-{$issuesText}
+═══════════════════════════════════════
+ STATIC ANALYSIS FINDINGS
+═══════════════════════════════════════
+{$issuesBlock}
 
-Return the complete refactored file.
+Return the COMPLETE refactored file — every single line.
+Do NOT truncate. Do NOT write "// ... rest unchanged" or any placeholder.
+Every line of the original file must appear in "refactored_file", modified or unmodified.
 PROMPT;
     }
 
     /**
      * Refactor a single file and return the result.
      *
-     * @param  string  $filePath     Relative path to the file (for display)
-     * @param  string  $fileContent  Current content of the file
-     * @param  array   $issues       Issues found for this specific file
+     * @param  string      $filePath     Relative path to the file (for display)
+     * @param  string      $fileContent  Current content of the file
+     * @param  array       $issues       Issues found for this specific file
+     * @param  string|null $apiRoute     Optional API route context (e.g. "v1/auth/login")
      */
-    public function refactorFile(string $filePath, string $fileContent, array $issues): array
-    {
+    public function refactorFile(
+        string  $filePath,
+        string  $fileContent,
+        array   $issues,
+        ?string $apiRoute = null
+    ): array {
         return $this->analyze([
             'file_path'    => $filePath,
             'file_content' => $fileContent,
             'issues'       => $issues,
+            'api_route'    => $apiRoute,
         ]);
     }
 }

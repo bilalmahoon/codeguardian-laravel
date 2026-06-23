@@ -108,13 +108,37 @@ PROMPT;
 
     protected function buildUserPrompt(array $context): string
     {
-        $type  = $context['project_type'] ?? 'laravel';
-        $name  = $context['project_name'] ?? 'Project';
-        $files = $this->prepareFiles($context['files'] ?? []);
+        $type      = $context['project_type'] ?? 'laravel';
+        $name      = $context['project_name'] ?? 'Project';
+        $files     = $this->prepareFiles($context['files'] ?? []);
+        $apiFilter = $context['api_filter']   ?? null;
+        $fileCount = count($context['files']  ?? []);
 
-        return "Perform a Senior Engineer technical debt audit for {$type} project: {$name}\n" .
-               "Focus on debt that hurts: complexity, duplication, dead code, type safety, poor naming.\n" .
-               "Prioritize by team impact — what slows development and causes bugs.\n" .
-               $this->formatFilesForPrompt($files);
+        $routeLine = $apiFilter
+            ? "Scope: API endpoint '{$apiFilter}' — audit the code on this request path.\n"
+            : '';
+
+        return <<<PROMPT
+Act as a Senior Software Engineer performing a technical debt audit before a major release.
+Prioritize debt by: how much it slows the team, how likely it is to cause bugs, how hard it makes onboarding.
+Do NOT flag cosmetic issues. Only flag debt that genuinely hurts — things that cause bugs or slow down development.
+
+Project  : {$name} ({$type})
+Files    : {$fileCount}
+{$routeLine}
+What to find (see system prompt for detail):
+- High cyclomatic complexity (>10 branches): unmaintainable and untestable methods
+- Deep nesting (>3 levels): use guard clauses / early returns
+- Large classes (>250 lines): split by responsibility
+- Duplicate code blocks (5+ identical lines): extract to shared method
+- Dead code: uncalled methods, unused variables, commented-out blocks
+- Magic numbers and strings: extract to named constants
+- Missing PHP 8.1 type declarations: every public/protected method needs types
+- Swallowed exceptions: empty catch blocks that hide failures
+
+For every finding: explain WHY it hurts the team right now, show the exact code, show the fixed version, and estimate hours to fix.
+
+{$this->formatFilesForPrompt($files)}
+PROMPT;
     }
 }

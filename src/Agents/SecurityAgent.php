@@ -119,13 +119,38 @@ PROMPT;
 
     protected function buildUserPrompt(array $context): string
     {
-        $type  = $context['project_type'] ?? 'laravel';
-        $name  = $context['project_name'] ?? 'Project';
-        $files = $this->prepareFiles($context['files'] ?? []);
+        $type      = $context['project_type'] ?? 'laravel';
+        $name      = $context['project_name'] ?? 'Project';
+        $files     = $this->prepareFiles($context['files'] ?? []);
+        $apiFilter = $context['api_filter']   ?? null;
+        $fileCount = count($context['files']  ?? []);
 
-        return "Perform a Senior Security Engineer penetration-review for {$type} project: {$name}\n" .
-               "Think like an attacker. Find real exploitable vulnerabilities, not theoretical ones.\n" .
-               "Focus on: SQL injection, broken auth, mass assignment, hardcoded secrets, XSS, IDOR.\n" .
-               $this->formatFilesForPrompt($files);
+        $routeLine = $apiFilter
+            ? "Scope: API endpoint '{$apiFilter}' — treat this as an external-facing attack surface.\n"
+            : '';
+
+        return <<<PROMPT
+Act as a Senior Application Security Engineer performing a penetration-style code review.
+Think like an attacker. For every piece of code ask: "how would I exploit this?"
+Every finding must describe a real exploit scenario — not a theoretical concern.
+This application handles real user data in production. A single vulnerability means a breach.
+
+Project  : {$name} ({$type})
+Files    : {$fileCount}
+{$routeLine}
+What to find (see system prompt for detail):
+- SQL injection via string interpolation or unparameterized raw queries
+- Authorization failures: missing policy checks, IDOR (accessing other users' resources)
+- Mass assignment: fill/create with unguarded request data
+- Hardcoded secrets or credentials in any file
+- XSS: unescaped output, {!! !!} with user content
+- Sensitive data exposure in API responses or logs
+- Cryptographic failures: md5/sha1 for passwords, weak random for tokens
+- Business logic vulnerabilities: race conditions, negative amounts, workflow bypasses
+
+For every finding: show the exact vulnerable code, write the real exploit payload, show the secure replacement.
+
+{$this->formatFilesForPrompt($files)}
+PROMPT;
     }
 }

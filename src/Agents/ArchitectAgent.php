@@ -93,13 +93,38 @@ PROMPT;
 
     protected function buildUserPrompt(array $context): string
     {
-        $type  = $context['project_type'] ?? 'laravel';
-        $name  = $context['project_name'] ?? 'Project';
-        $files = $this->prepareFiles($context['files'] ?? []);
+        $type      = $context['project_type'] ?? 'laravel';
+        $name      = $context['project_name'] ?? 'Project';
+        $files     = $this->prepareFiles($context['files'] ?? []);
+        $scope     = $context['scope']        ?? 'full';
+        $apiFilter = $context['api_filter']   ?? null;
+        $fileCount = count($context['files']  ?? []);
 
-        return "Perform a Principal-Engineer-level architecture review for {$type} project: {$name}\n" .
-               "Total files: " . count($context['files'] ?? []) . "\n" .
-               "Focus on: fat controllers, missing services, SOLID violations, untestable code.\n" .
-               $this->formatFilesForPrompt($files);
+        $routeLine = $apiFilter
+            ? "Scope: API endpoint '{$apiFilter}' — focus on the controller and services for this route.\n"
+            : '';
+
+        return <<<PROMPT
+Act as a Principal Software Engineer performing a high-stakes architecture review.
+Review this as if you are the tech lead signing off before a production deployment that serves millions of users.
+Be brutally honest. Surface every real architectural problem — not lint, not style, but real structural issues that will hurt the team or users.
+
+Project  : {$name} ({$type})
+Scope    : {$scope} ({$fileCount} file(s))
+{$routeLine}
+What to find (see system prompt for detail on each):
+- Fat controllers with business logic that belongs in a Service class
+- Missing service layer — logic buried in controllers or models
+- SOLID violations with concrete code examples
+- Dependency injection failures (static Facades that kill testability)
+- Long methods (>25 lines) that are untestable and fragile
+- Missing FormRequests for inline validation
+- God objects / fat models
+
+For every issue: show the exact problematic code, explain the production impact, and show the complete fix.
+Do not report cosmetic issues. Every finding must be something that genuinely hurts.
+
+{$this->formatFilesForPrompt($files)}
+PROMPT;
     }
 }

@@ -111,13 +111,35 @@ PROMPT;
 
     protected function buildUserPrompt(array $context): string
     {
-        $type  = $context['project_type'] ?? 'laravel';
-        $name  = $context['project_name'] ?? 'Project';
-        $files = $this->prepareFiles($context['files'] ?? []);
+        $type      = $context['project_type'] ?? 'laravel';
+        $name      = $context['project_name'] ?? 'Project';
+        $files     = $this->prepareFiles($context['files'] ?? []);
+        $apiFilter = $context['api_filter']   ?? null;
+        $fileCount = count($context['files']  ?? []);
 
-        return "Perform a Senior Performance Engineer review for {$type} project: {$name}\n" .
-               "Find real bottlenecks. Think in queries, memory, and milliseconds.\n" .
-               "Focus on: N+1 queries, missing indexes, missing cache, bulk operation problems, memory leaks.\n" .
-               $this->formatFilesForPrompt($files);
+        $routeLine = $apiFilter
+            ? "Scope: API endpoint '{$apiFilter}' — profile every query and operation on this request path.\n"
+            : '';
+
+        return <<<PROMPT
+Act as a Senior Performance Engineer who has profiled Laravel apps handling 10M+ requests/day.
+Think in queries, memory, and milliseconds. Every finding must quantify the impact.
+This code will be under heavy production load — find everything that will degrade under traffic.
+
+Project  : {$name} ({$type})
+Files    : {$fileCount}
+{$routeLine}
+What to find (see system prompt for detail):
+- N+1 queries (state: loop location, relationship loaded, queries before → after fix)
+- SELECT * on large tables without column selection or pagination
+- Missing DB indexes on WHERE/JOIN/ORDER BY columns
+- Repeated queries that need Cache::remember()
+- Bulk operations doing N round-trips instead of one upsert
+- Memory leaks loading large datasets without chunk()/cursor()
+
+For every finding: show the exact slow code, quantify the impact (e.g. "101 queries → 2"), show the optimized code.
+
+{$this->formatFilesForPrompt($files)}
+PROMPT;
     }
 }

@@ -126,7 +126,9 @@ class CodeScanner
         }
 
         // Collect only the controller files involved
-        $files = [];
+        $files           = [];
+        $unresolvedRoutes = [];
+
         foreach ($filteredRoutes as $route) {
             $controllerFile = $extractor->resolveControllerFile($route);
             if ($controllerFile) {
@@ -134,7 +136,30 @@ class CodeScanner
                 if (file_exists($fullPath) && filesize($fullPath) <= $this->maxFileSize) {
                     $files[$controllerFile] = file_get_contents($fullPath);
                 }
+            } else {
+                $unresolvedRoutes[] = $route;
             }
+        }
+
+        // Fallback: controller couldn't be resolved from route definition.
+        // Search for PHP files whose path contains any meaningful URI segment keyword
+        // (e.g. "auth", "login" from "v1/auth/login").
+        if (empty($files) && ! empty($unresolvedRoutes)) {
+            $keywords = $this->extractUriKeywords($apiFilter);
+            if (! empty($keywords)) {
+                $fallback = $this->findControllersByUriKeywords($projectRoot, $keywords);
+                $files    = array_merge($files, $fallback);
+            }
+        }
+
+        if (empty($files)) {
+            throw new \InvalidArgumentException(
+                "Routes matching '{$apiFilter}' were found, but their controller files " .
+                "could not be located on disk.\n" .
+                "Hint: the controller class name parsed from the route definition " .
+                "was not found under app/, Modules/, or src/.\n" .
+                "Check the route file and ensure the controller file exists in one of those directories."
+            );
         }
 
         // Also include service files likely called by these controllers
@@ -239,6 +264,82 @@ class CodeScanner
         }
 
         return $serviceFiles;
+    }
+
+    /**
+     * Extract meaningful search keywords from a URI filter string.
+     * Strips version segments (v1, v2, api) and returns the rest.
+     *
+     * "v1/auth/login" → ['auth', 'login']
+     * "api/v2/users/profile" → ['users', 'profile']
+     */
+    private function extractUriKeywords(string $apiFilter): array
+    {
+        $segments = array_filter(
+            explode('/', trim($apiFilter, '/')),
+            fn($s) => $s !== '' && ! preg_match('/^v\d+$|^api$/i', $s)
+        );
+        return array_values($segments);
+    }
+
+    /**
+     * Search for controller files whose file path contains any of the given keywords.
+     * Restricted to Http/Controllers and Modules directories.
+     *
+     * @param  string[] $keywords
+     * @return array<string, string>  [ 'relative/path.php' => 'file contents' ]
+     */
+    private function findControllersByUriKeywords(string $projectRoot, array $keywords): array
+    {
+        $files      = [];
+        $searchDirs = ['app', 'Modules', 'src'];
+
+        foreach ($searchDirs as $dir) {
+            $base = $projectRoot . '/' . $dir;
+            if (! is_dir($base)) {
+                continue;
+            }
+
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($base, \RecursiveDirectoryIterator::SKIP_DOTS)
+            );
+
+            foreach ($iterator as $file) {
+                if ($file->getExtension() !== 'php') {
+                    continue;
+                }
+
+                // Only scan files that look like controllers (in a Controllers directory
+                // or with Controller/Action/Handler suffix in the filename)
+                $pathname = str_replace('\\', '/', $file->getPathname());
+                $filename = $file->getFilenameWithoutExtension();
+
+                $isControllerPath = str_contains($pathname, '/Controller')
+                    || str_contains($pathname, '/Actions/')
+                    || str_contains($pathname, '/Handlers/')
+                    || str_ends_with($filename, 'Controller')
+                    || str_ends_with($filename, 'Action')
+                    || str_ends_with($filename, 'Handler');
+
+                if (! $isControllerPath) {
+                    continue;
+                }
+
+                // Match if any keyword appears in the lowercase file path
+                $lowerPath = strtolower($pathname);
+                foreach ($keywords as $keyword) {
+                    if (str_contains($lowerPath, strtolower($keyword))) {
+                        $relPath = ltrim(str_replace($projectRoot, '', $file->getPathname()), '/');
+                        if ($file->getSize() <= $this->maxFileSize) {
+                            $files[$relPath] = file_get_contents($file->getPathname());
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        return $files;
     }
 
     private function findFileByClassName(string $projectRoot, string $className): ?string

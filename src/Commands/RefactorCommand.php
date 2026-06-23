@@ -814,8 +814,9 @@ class RefactorCommand extends Command
         }
 
         try {
-            $agent  = new RefactorAgent();
-            $result = $agent->refactorFile($filePath, $currentContent, array_values($relevantIssues));
+            $agent     = new RefactorAgent();
+            $apiFilter = $this->option('api') ?: null;
+            $result    = $agent->refactorFile($filePath, $currentContent, array_values($relevantIssues), $apiFilter);
 
             if (! empty($result['error'])) {
                 $this->warn("  ⚠  AI refactoring error: {$result['error']}");
@@ -868,13 +869,8 @@ class RefactorCommand extends Command
                 }
             }
 
-            // Ask confirmation
-            if ($this->interactiveMode) {
-                if (! $this->confirm('  Apply AI refactoring changes?', true)) {
-                    $this->line('  AI changes skipped.');
-                    return [];
-                }
-            }
+            // User confirmed "Proceed with refactoring?" at Step 3.
+            // No second confirmation here — AI changes are applied automatically.
 
             // Write AI-refactored content
             File::put($fullPath, $aiContent);
