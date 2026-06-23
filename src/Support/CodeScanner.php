@@ -14,11 +14,21 @@ class CodeScanner
 
     public function __construct()
     {
-        $this->skipDirs    = config('codeguardian.analysis.skip_dirs', [
-            'vendor', 'node_modules', '.git', 'storage', 'bootstrap/cache',
-            '.dart_tool', 'build', '.pub-cache',
-        ]);
-        $this->maxFileSize = config('codeguardian.analysis.max_file_size', 100_000);
+        // config() requires a bootstrapped Laravel app. Wrap in try/catch so
+        // this class can be instantiated in unit tests without a running container.
+        try {
+            $this->skipDirs    = config('codeguardian.analysis.skip_dirs', [
+                'vendor', 'node_modules', '.git', 'storage', 'bootstrap/cache',
+                '.dart_tool', 'build', '.pub-cache',
+            ]);
+            $this->maxFileSize = config('codeguardian.analysis.max_file_size', 100_000);
+        } catch (\Throwable) {
+            $this->skipDirs    = [
+                'vendor', 'node_modules', '.git', 'storage', 'bootstrap/cache',
+                '.dart_tool', 'build', '.pub-cache',
+            ];
+            $this->maxFileSize = 100_000;
+        }
     }
 
     // ─── Public API ──────────────────────────────────────────────────────────
@@ -126,8 +136,8 @@ class CodeScanner
         }
 
         // Collect only the controller files involved
-        $files           = [];
-        $unresolvedRoutes = [];
+        $files            = [];
+        $hasUnresolved    = false;
 
         foreach ($filteredRoutes as $route) {
             $controllerFile = $extractor->resolveControllerFile($route);
@@ -137,18 +147,20 @@ class CodeScanner
                     $files[$controllerFile] = file_get_contents($fullPath);
                 }
             } else {
-                $unresolvedRoutes[] = $route;
+                $hasUnresolved = true;
             }
         }
 
-        // Fallback: controller couldn't be resolved from route definition.
-        // Search for PHP files whose path contains any meaningful URI segment keyword
-        // (e.g. "auth", "login" from "v1/auth/login").
-        if (empty($files) && ! empty($unresolvedRoutes)) {
+        // Fallback: one or more routes couldn't be resolved from the route definition.
+        // Run regardless of whether some files were already found — a partially-unresolved
+        // scope (e.g. login + profile routes where only profile resolved) is still wrong.
+        // Search for controller files whose path contains meaningful URI segment keywords.
+        if ($hasUnresolved) {
             $keywords = $this->extractUriKeywords($apiFilter);
             if (! empty($keywords)) {
+                // array_merge with $files last so directly-resolved controllers take precedence
                 $fallback = $this->findControllersByUriKeywords($projectRoot, $keywords);
-                $files    = array_merge($files, $fallback);
+                $files    = array_merge($fallback, $files);
             }
         }
 
@@ -312,7 +324,8 @@ class CodeScanner
                 // Only scan files that look like controllers (in a Controllers directory
                 // or with Controller/Action/Handler suffix in the filename)
                 $pathname = str_replace('\\', '/', $file->getPathname());
-                $filename = $file->getFilenameWithoutExtension();
+                // SplFileInfo has no getFilenameWithoutExtension() — use pathinfo()
+                $filename = pathinfo($file->getFilename(), PATHINFO_FILENAME);
 
                 $isControllerPath = str_contains($pathname, '/Controller')
                     || str_contains($pathname, '/Actions/')

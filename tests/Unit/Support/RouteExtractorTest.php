@@ -202,6 +202,80 @@ class RouteExtractorTest extends TestCase
         $this->assertContainsUri('/v1/products', $uris);
     }
 
+    // ─── Controller extraction ───────────────────────────────────────────────
+
+    public function test_extracts_array_syntax_controller(): void
+    {
+        file_put_contents($this->tmpDir . '/routes/api.php', <<<'PHP'
+        <?php
+        Route::post('/login', [\App\Http\Controllers\Auth\LoginController::class, 'login']);
+        PHP);
+
+        $routes = $this->extractor->extractAll();
+        $this->assertNotEmpty($routes);
+        $this->assertStringContainsString('LoginController', $routes[0]['controller']);
+        $this->assertStringContainsString('@login', $routes[0]['controller']);
+    }
+
+    public function test_extracts_invokable_controller(): void
+    {
+        file_put_contents($this->tmpDir . '/routes/api.php', <<<'PHP'
+        <?php
+        Route::post('/login', \App\Http\Controllers\Auth\LoginAction::class);
+        PHP);
+
+        $routes = $this->extractor->extractAll();
+        $this->assertNotEmpty($routes);
+        $this->assertStringContainsString('LoginAction', $routes[0]['controller']);
+        $this->assertStringContainsString('@__invoke', $routes[0]['controller']);
+    }
+
+    public function test_extracts_legacy_string_syntax_controller(): void
+    {
+        file_put_contents($this->tmpDir . '/routes/api.php', <<<'PHP'
+        <?php
+        Route::post('/login', 'App\Http\Controllers\AuthController@login');
+        PHP);
+
+        $routes = $this->extractor->extractAll();
+        $this->assertNotEmpty($routes);
+        $this->assertStringContainsString('AuthController@login', $routes[0]['controller']);
+    }
+
+    // ─── False-positive regression ────────────────────────────────────────────
+
+    /**
+     * Regression: filter('v1/auth/login') must NOT match a short route like '/login'
+     * or '/auth' just because the filter string contains those segments.
+     * Previously str_contains($normFilter, $normRoute) caused RouteServiceProvider
+     * to be pulled in via the web /login route.
+     */
+    public function test_filter_does_not_false_positive_short_routes(): void
+    {
+        $routes = [
+            ['method' => 'GET',  'uri' => '/login',            'controller' => 'RouteServiceProvider@boot', 'name' => null, 'source_file' => 'routes/web.php',  'line' => 1],
+            ['method' => 'GET',  'uri' => '/auth',             'controller' => 'SomeController@auth',       'name' => null, 'source_file' => 'routes/web.php',  'line' => 2],
+            ['method' => 'POST', 'uri' => '/v1/auth/login',    'controller' => 'AuthController@login',      'name' => null, 'source_file' => 'routes/api.php',  'line' => 5],
+        ];
+
+        $result = $this->extractor->filter($routes, 'v1/auth/login');
+
+        // Only the real API route must be returned — NOT /login or /auth
+        $this->assertCount(1, $result, 'Filter must not match short sub-string routes');
+        $this->assertSame('/v1/auth/login', $result[0]['uri']);
+    }
+
+    public function test_resolveControllerFile_skips_closure_and_unknown(): void
+    {
+        $closure  = ['method' => 'GET', 'uri' => '/health',    'controller' => 'Closure',  'name' => null, 'source_file' => 'routes/api.php', 'line' => 1];
+        $unknown  = ['method' => 'GET', 'uri' => '/something', 'controller' => 'Unknown',  'name' => null, 'source_file' => 'routes/api.php', 'line' => 2];
+        $empty    = ['method' => 'GET', 'uri' => '/other',     'controller' => '',          'name' => null, 'source_file' => 'routes/api.php', 'line' => 3];
+
+        $this->assertNull($this->extractor->resolveControllerFile($closure));
+        $this->assertNull($this->extractor->resolveControllerFile($unknown));
+        $this->assertNull($this->extractor->resolveControllerFile($empty));
+    }
+
     // ─── Edge cases ──────────────────────────────────────────────────────────
 
     public function test_empty_route_file_returns_empty_array(): void
