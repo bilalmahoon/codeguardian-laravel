@@ -62,12 +62,42 @@ existing business behavior:
 - Extract business logic out of controllers into Services — ACTUALLY write the
   Service in "generated_files", move the logic, inject it, update the controller.
 
-Question every single line. Assume every millisecond matters. If you only found a
-couple of small changes, you did not look deeply enough — keep looking. Never claim
-"already optimized" unless no meaningful optimization provably exists.
+Question every single line of the RELEVANT code paths. Assume every millisecond
+matters. If you only found a couple of small changes in the relevant paths, you did
+not look deeply enough — keep looking. Never claim "already optimized" unless no
+meaningful optimization provably exists.
 
 For each non-trivial change, the "description" must state: the problem, why it hurts
 performance/correctness, and the expected improvement.
+
+══════════════════════════════════════════════════
+ SCOPE DISCIPLINE — SURGICAL, NOT WHOLESALE
+══════════════════════════════════════════════════
+
+You are refactoring ONE specific API endpoint's call chain (the endpoint is named at
+the top of the task). This file was pulled into scope because the endpoint reaches it.
+
+CRITICAL: Only change code that PARTICIPATES IN — or DIRECTLY SUPPORTS — that endpoint's
+call chain.
+
+- A shared class (Model, Repository, Cache, DTO) usually has MANY methods. Most are used
+  by OTHER endpoints that are NOT being refactored right now. You MUST NOT redesign,
+  rewrite, rename, re-type, reorder, or "improve" a method that the target endpoint does
+  not use. Touching them risks breaking unrelated features that are outside this scope and
+  were never analyzed or tested in this run.
+- Example: refactoring `v1/auth/login`, and the chain calls `Role::getRoleByRoleKey()`.
+  You may improve `getRoleByRoleKey()` and anything it calls. You must leave the model's
+  other 15 methods (used by registration, admin, reporting, …) BYTE-FOR-BYTE UNCHANGED.
+- Identify the relevant methods from: the route handler method, the feature/service it
+  injects, and the RELATED FILES call chain shown to you. Trace inward from there.
+- When in doubt about whether a method is on the call chain, DO NOT change it.
+
+You STILL return the COMPLETE file (every line), but unrelated methods must be reproduced
+exactly as-is. The diff for a shared class should be small and targeted — only the methods
+on the endpoint's path should appear changed.
+
+"Deep rethink" applies to the RELEVANT code paths — go as deep as needed there, and only
+there.
 
 ══════════════════════════════════════════════════
  MODULE ARCHITECTURE — ABSOLUTE RULES
@@ -294,6 +324,15 @@ PROMPT;
             ? count($issues) . " static analysis finding(s) are listed below. Fix ALL of them, PLUS any additional problems you independently identify that static analysis missed."
             : "Static analysis found no issues in this file, but perform a full independent expert review. Static analysis misses many real problems — find them.";
 
+        $scopeLine = $apiRoute
+            ? "SCOPE: This file was reached from the \"{$apiRoute}\" endpoint. Change ONLY the methods that\n"
+              . "are on (or directly support) that endpoint's call chain. Any method NOT used by this\n"
+              . "endpoint — e.g. methods called only by other features/admin/reporting — MUST be reproduced\n"
+              . "byte-for-byte unchanged. Do not redesign, rename, or re-type unrelated methods. The diff\n"
+              . "for a shared Model/Repository should be small and targeted.\n"
+            : "SCOPE: Change only what genuinely needs changing. Reproduce unrelated, already-correct\n"
+              . "methods byte-for-byte unchanged so the diff stays focused and reviewable.\n";
+
         $relatedSection = $relatedBlock !== ''
             ? <<<SECTION
 
@@ -330,6 +369,7 @@ Review this as if it serves millions of requests per day and ships to production
 ═══════════════════════════════════════
 {$issuesBlock}
 
+{$scopeLine}
 Return the COMPLETE refactored FILE TO REFACTOR — every single line.
 Do NOT truncate. Do NOT write "// ... rest unchanged" or any placeholder.
 Every line of the original file must appear in "refactored_file", modified or unmodified.

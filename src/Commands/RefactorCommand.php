@@ -586,6 +586,8 @@ class RefactorCommand extends Command
             $this->line('  Analyzing and preparing changes...');
             $result = $this->orchestrator->refactorFile($filePath, $originalContent, $issues);
 
+            $staticApplied = false;
+
             // ── Show what WILL change (preview diff) before writing ──────────
             if ($result->hasChanges()) {
                 $this->newLine();
@@ -608,17 +610,44 @@ class RefactorCommand extends Command
                         }
                     }
                 }
+
+                // ── Final syntax safety gate (combined static result) ────────
+                if (! $this->orchestrator->isValidPhp($result->refactored)) {
+                    $this->error("  ⚠️  SAFETY GATE: refactored file has PHP syntax errors — static write ABORTED.");
+                    $this->error("  Original file is unchanged. Falling back to AI pass only.");
+                } else {
+                    // ── Write static-refactored content to disk ──────────────
+                    File::put($fullPath, $result->refactored);
+
+                    // ── Write any generated files (FormRequests, Services…) ──
+                    foreach ($result->generatedFiles as $genPath => $genContent) {
+                        $absGenPath = str_starts_with($genPath, '/')
+                            ? $genPath
+                            : $this->projectRoot . '/' . $genPath;
+
+                        if (! File::exists($absGenPath)) {
+                            File::ensureDirectoryExists(dirname($absGenPath));
+                            File::put($absGenPath, $genContent);
+                            $this->info("  📄 Generated: {$genPath}");
+                        } else {
+                            $this->line("  ⚠  Skipped (already exists): {$genPath}");
+                        }
+                    }
+
+                    $this->info("  ✔  Static fixes saved ({$result->autoFixed} auto-fix(es), {$result->manualTodos} manual TODO(s))");
+                    $staticApplied = true;
+                }
             } else {
-                $this->line('  No auto-fixable code patterns found.');
+                // No auto-fixable static patterns. This is NOT a reason to skip
+                // the file — most real structural work (method extraction, query
+                // rewrites, caching, breaking up fat classes) is done by the AI
+                // pass below, not by regex auto-fixes. Previously this branch
+                // `continue`d and the file (e.g. BaseLogin, token repositories)
+                // was never sent to the AI at all.
+                $this->line('  No auto-fixable static patterns — handing to AI deep-refactor.');
                 foreach ($result->changes as $change) {
                     $this->line('  ⚠  ' . $change);
                 }
-                $refactorResults[$filePath] = [
-                    'status' => 'manual_required', 'issues' => count($issues),
-                    'auto_fixed' => 0, 'manual_todos' => $result->manualTodos,
-                    'changes' => $result->changes,
-                ];
-                continue;
             }
 
             // User already confirmed "Proceed with refactoring N issues?" at Step 3.
@@ -626,44 +655,13 @@ class RefactorCommand extends Command
             // Backups are always written before any file is touched, so every change
             // can be rolled back via the rollback prompt if tests fail.
 
-            // ── Final syntax safety gate ─────────────────────────────────────
-            // Even though StaticOrchestrator validates each individual fix,
-            // the COMBINED result (Phase 1 + Phase 2 comments) is validated here
-            // as the absolute last line of defense before any disk write.
-            if (! $this->orchestrator->isValidPhp($result->refactored)) {
-                $this->error("  ⚠️  SAFETY GATE: refactored file has PHP syntax errors — write ABORTED.");
-                $this->error("  Original file is unchanged. Please review manually.");
-                $refactorResults[$filePath] = [
-                    'status' => 'syntax_error_aborted', 'issues' => count($issues),
-                    'auto_fixed' => 0, 'manual_todos' => $result->manualTodos,
-                    'changes' => $result->changes,
-                ];
-                continue;
-            }
-
-            // ── Write refactored content to disk ─────────────────────────────
-            File::put($fullPath, $result->refactored);
-
-            // ── Write any generated files (FormRequests, Services, etc.) ─────
-            foreach ($result->generatedFiles as $genPath => $genContent) {
-                $absGenPath = str_starts_with($genPath, '/')
-                    ? $genPath
-                    : $this->projectRoot . '/' . $genPath;
-
-                if (! File::exists($absGenPath)) {
-                    File::ensureDirectoryExists(dirname($absGenPath));
-                    File::put($absGenPath, $genContent);
-                    $this->info("  📄 Generated: {$genPath}");
-                } else {
-                    $this->line("  ⚠  Skipped (already exists): {$genPath}");
-                }
-            }
-
-            $this->info("  ✔  Static fixes saved ({$result->autoFixed} auto-fix(es), {$result->manualTodos} manual TODO(s))");
-
             $aiChanges = [];
 
             // ── AI deep-refactoring pass (mode=ai or mode=hybrid) ────────────
+            // Runs for EVERY in-scope file with findings, regardless of whether
+            // static auto-fixes were available. The AI re-reads the file from
+            // disk inside applyAiRefactoring, so it sees any static fixes already
+            // applied above.
             if ($this->aiEnabled) {
                 // Pass the entire in-scope file set as read-only context so Claude
                 // sees the full call chain (controller → service → repository) and
@@ -672,6 +670,19 @@ class RefactorCommand extends Command
                 $aiChanges = $this->applyAiRefactoring($filePath, $fullPath, $issues, $relatedContextFiles);
             } elseif ($this->aiMode !== 'static') {
                 $this->line('  ⚡ AI provider not configured — static-only mode.');
+            }
+
+            // ── Determine final status ───────────────────────────────────────
+            if (! $staticApplied && empty($aiChanges)) {
+                // Nothing was actually changed — only manual TODOs remain.
+                $refactorResults[$filePath] = [
+                    'status'       => 'manual_required',
+                    'issues'       => count($issues),
+                    'auto_fixed'   => 0,
+                    'manual_todos' => $result->manualTodos,
+                    'changes'      => $result->changes,
+                ];
+                continue;
             }
 
             $refactorResults[$filePath] = [
