@@ -170,7 +170,7 @@ class CodeScanner
 
             $files = $tracer->trace(
                 $classes,
-                maxDepth: 2,
+                maxDepth: 3,
                 moduleRoot: $moduleRoot,
                 entryMethods: $entryMethods
             );
@@ -317,7 +317,7 @@ class CodeScanner
             try {
                 $tracer     = new DependencyTracer($projectRoot);
                 $moduleRoot = $tracer->detectModuleRoot($fullPath);
-                $traced     = $tracer->trace([$fqcn], maxDepth: 2, moduleRoot: $moduleRoot);
+                $traced     = $tracer->trace([$fqcn], maxDepth: 3, moduleRoot: $moduleRoot);
                 // Keep the target file first; merge traced dependencies after it
                 $files = array_merge($files, $traced);
             } catch (\Throwable) {

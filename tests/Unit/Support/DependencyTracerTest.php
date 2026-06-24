@@ -161,6 +161,72 @@ class DependencyTracerTest extends TestCase
     }
 
     /** @test */
+    public function test_includes_parent_class_when_concrete_extends_base(): void
+    {
+        // Container resolves an abstract BaseLogin to a thin concrete Login that
+        // extends it. The real logic lives in the parent — it MUST be included.
+        $ns          = 'CgTracerTest' . uniqid();
+        $baseFqn     = $ns . '\\BaseLogin';
+        $concreteFqn = $ns . '\\Login';
+
+        $baseFile     = $this->tmpDir . '/BaseLogin.php';
+        $concreteFile = $this->tmpDir . '/Login.php';
+
+        file_put_contents($baseFile, "<?php\nnamespace {$ns};\nabstract class BaseLogin { public function handle() {} }");
+        file_put_contents($concreteFile, "<?php\nnamespace {$ns};\nclass Login extends BaseLogin {}");
+
+        require_once $baseFile;
+        require_once $concreteFile;
+
+        $tracer = new DependencyTracer($this->tmpDir);
+        $files  = $tracer->trace([$concreteFqn], 2);
+
+        $filenames = array_map('basename', array_keys($files));
+        $this->assertContains('Login.php', $filenames, 'Concrete class must be included');
+        $this->assertContains('BaseLogin.php', $filenames,
+            'Parent class (with the real logic) must be included'
+        );
+    }
+
+    /** @test */
+    public function test_traces_use_imports_referenced_in_method_bodies(): void
+    {
+        // A feature class that uses a Repository INSIDE a method body (not via
+        // constructor or method parameter). Only a `use` import reveals it.
+        $ns       = 'CgTracerTest' . uniqid();
+        $repoFqn  = $ns . '\\UserRepository';
+        $featFqn  = $ns . '\\LoginFeature';
+
+        $repoFile = $this->tmpDir . '/UserRepository.php';
+        $featFile = $this->tmpDir . '/LoginFeature.php';
+
+        file_put_contents($repoFile, "<?php\nnamespace {$ns};\nclass UserRepository { public function find() {} }");
+        file_put_contents($featFile, <<<PHP
+            <?php
+            namespace {$ns};
+            use {$ns}\\UserRepository;
+            class LoginFeature {
+                public function handle() {
+                    \$repo = new UserRepository();
+                    return \$repo->find();
+                }
+            }
+            PHP);
+
+        require_once $repoFile;
+        require_once $featFile;
+
+        $tracer = new DependencyTracer($this->tmpDir);
+        $files  = $tracer->trace([$featFqn], 2);
+
+        $filenames = array_map('basename', array_keys($files));
+        $this->assertContains('LoginFeature.php', $filenames);
+        $this->assertContains('UserRepository.php', $filenames,
+            'Repository referenced via use-import inside a method body must be traced'
+        );
+    }
+
+    /** @test */
     public function test_traces_two_hops_controller_service_repository(): void
     {
         $ns      = 'CgTracerTest' . uniqid();

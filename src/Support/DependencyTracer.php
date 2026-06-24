@@ -158,22 +158,34 @@ class DependencyTracer
             return;
         }
 
-        // Include only files inside the project — never vendor/
-        if ($file && str_starts_with($file, $this->projectRoot)) {
-            $relPath = ltrim(str_replace($this->projectRoot, '', $file), '/');
-
-            // Module-boundary enforcement: when $moduleRoot is set, only include
-            // files that live within that module. Dependencies from other modules
-            // or from the global app/ layer are skipped — they must not be modified
-            // during a single-module refactoring operation.
-            if ($this->moduleRoot !== null && ! str_starts_with($relPath, $this->moduleRoot . '/')) {
-                return;
-            }
-
-            $files[$relPath] = file_get_contents($file);
+        // A file outside the project root is a vendor/framework class — never
+        // include it and never recurse into its hierarchy or dependencies.
+        if (! $file || ! str_starts_with($file, $this->projectRoot)) {
+            return;
         }
 
-        // Stop recursing once we hit the depth cap
+        $relPath = ltrim(str_replace($this->projectRoot, '', $file), '/');
+
+        // Module-boundary enforcement: when $moduleRoot is set, only include
+        // files that live within that module. Dependencies from other modules
+        // or from the global app/ layer are skipped — they must not be modified
+        // during a single-module refactoring operation.
+        if ($this->moduleRoot !== null && ! str_starts_with($relPath, $this->moduleRoot . '/')) {
+            return;
+        }
+
+        $source          = file_get_contents($file);
+        $files[$relPath] = $source;
+
+        // ── Class hierarchy (SAME depth) ─────────────────────────────────────
+        // The parent class / traits / interfaces are PART of this class's
+        // definition, not a separate dependency hop. This is critical for the
+        // common pattern where the container resolves an abstract `BaseLogin`
+        // to a thin concrete `Login extends BaseLogin` — the real logic lives in
+        // the parent, so it MUST be pulled in even at the depth cap.
+        $this->traceHierarchy($ref, $files, $depth, $maxDepth);
+
+        // Stop recursing into dependencies once we hit the depth cap
         if ($depth >= $maxDepth) {
             return;
         }
@@ -189,6 +201,68 @@ class DependencyTracer
         $entryMethod = $this->entryMethods[$class] ?? ($this->entryMethods[$concrete] ?? null);
         if ($entryMethod !== null && $ref->hasMethod($entryMethod)) {
             $this->traceParameters($ref->getMethod($entryMethod), $files, $depth, $maxDepth);
+        }
+
+        // 3) Source-level dependencies used INSIDE method bodies (repositories,
+        //    services, models, query builders) that are not type-hinted params.
+        //    Reflection cannot see these, so scan the `use` imports of the file.
+        if ($source !== '') {
+            $this->traceUseImports($source, $files, $depth, $maxDepth);
+        }
+    }
+
+    /**
+     * Trace parent class, implemented interfaces, and used traits at the SAME
+     * depth — they are part of the class definition, not a dependency hop.
+     */
+    private function traceHierarchy(
+        \ReflectionClass $ref,
+        array &$files,
+        int $depth,
+        int $maxDepth
+    ): void {
+        $parent = $ref->getParentClass();
+        if ($parent) {
+            $this->traceClass($parent->getName(), $files, $depth, $maxDepth);
+        }
+
+        foreach ($ref->getInterfaceNames() as $interface) {
+            $this->traceClass($interface, $files, $depth, $maxDepth);
+        }
+
+        foreach ($ref->getTraitNames() as $trait) {
+            $this->traceClass($trait, $files, $depth, $maxDepth);
+        }
+    }
+
+    /**
+     * Scan a file's `use Fully\Qualified\ClassName;` imports and trace each as a
+     * dependency hop. This captures repositories / services / models / query
+     * objects that are referenced inside method bodies (not constructor or method
+     * parameters), which Reflection alone cannot discover.
+     *
+     * Vendor classes and out-of-module files are filtered downstream by
+     * traceClass (isVendorClass + module-boundary check), so this stays tight.
+     */
+    private function traceUseImports(
+        string $source,
+        array &$files,
+        int $depth,
+        int $maxDepth
+    ): void {
+        if (! preg_match_all('/^\s*use\s+([A-Za-z0-9_\\\\]+)\s*(?:as\s+\w+)?\s*;/m', $source, $m)) {
+            return;
+        }
+
+        foreach ($m[1] as $fqcn) {
+            $fqcn = ltrim($fqcn, '\\');
+
+            // Skip trait/function/const imports and obvious non-class noise
+            if ($fqcn === '' || str_contains($fqcn, '{')) {
+                continue;
+            }
+
+            $this->traceClass($fqcn, $files, $depth + 1, $maxDepth);
         }
     }
 
