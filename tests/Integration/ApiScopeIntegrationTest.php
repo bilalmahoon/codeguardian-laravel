@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CodeGuardian\Laravel\Tests\Integration;
 
+use CodeGuardian\Laravel\Commands\RefactorCommand;
 use CodeGuardian\Laravel\Support\CodeScanner;
 use CodeGuardian\Laravel\Support\DependencyTracer;
 use CodeGuardian\Laravel\Support\RouteResolver;
@@ -38,6 +39,13 @@ use Orchestra\Testbench\TestCase;
  */
 class ApiScopeIntegrationTest extends TestCase
 {
+    // ─── Testbench bootstrap ─────────────────────────────────────────────────
+
+    protected function getPackageProviders($app): array
+    {
+        return [\CodeGuardian\Laravel\CodeGuardianServiceProvider::class];
+    }
+
     // ─── Route registration ───────────────────────────────────────────────────
 
     /**
@@ -224,5 +232,126 @@ class ApiScopeIntegrationTest extends TestCase
             'Login API scope must contain exactly 4 files: controller + 2 services + 1 repository. ' .
             'Got: ' . implode(', ', array_map('basename', array_keys($context['files'])))
         );
+    }
+
+    // ─── Module-boundary enforcement ─────────────────────────────────────────
+
+    /** @test */
+    public function test_dependency_tracer_respects_module_boundary(): void
+    {
+        // Simulate a modular project layout:
+        //   Fixtures/Modules/Auth/Controllers/ApiAuthController.php
+        //   Fixtures/Modules/Auth/Services/AuthService.php
+        //   Fixtures/Modules/Payments/Services/PaymentService.php  ← other module
+        //
+        // When module boundary is "Modules/Auth", PaymentService must be excluded.
+
+        $fixturesRoot = realpath(__DIR__ . '/Fixtures');
+        $tracer       = new DependencyTracer($fixturesRoot);
+
+        // Trace with NO module boundary → all files included
+        $allFiles     = $tracer->trace([ApiAuthController::class], maxDepth: 2);
+        $this->assertGreaterThanOrEqual(4, count($allFiles),
+            'Without boundary: controller + services + repository must all be present'
+        );
+
+        // Verify detectModuleRoot works on a hypothetical Modules/ path
+        $hypotheticalFile = $fixturesRoot . '/Modules/UserAuthentication/Http/Controllers/Controller.php';
+        $detected = $tracer->detectModuleRoot($hypotheticalFile);
+        $this->assertSame('Modules/UserAuthentication', $detected,
+            'detectModuleRoot must extract "Modules/ModuleName" from a modular file path'
+        );
+
+        // detectModuleRoot returns null for non-modular paths (app/Http/...)
+        $nonModularFile = $fixturesRoot . '/app/Http/Controllers/HomeController.php';
+        $this->assertNull($tracer->detectModuleRoot($nonModularFile),
+            'Non-modular paths must return null module root'
+        );
+    }
+
+    /** @test */
+    public function test_tracer_with_module_root_excludes_other_module_files(): void
+    {
+        // Build a temp directory that looks like a modular project
+        $tmpDir = sys_get_temp_dir() . '/cg_module_test_' . uniqid();
+        mkdir($tmpDir . '/Modules/Auth/Services',     0755, true);
+        mkdir($tmpDir . '/Modules/Payments/Services', 0755, true);
+
+        $ns        = 'CgModuleTest' . uniqid();
+        $payNs     = $ns . 'Payment';
+
+        $authSvcFile = $tmpDir . '/Modules/Auth/Services/AuthService.php';
+        $paySvcFile  = $tmpDir . '/Modules/Payments/Services/PaymentService.php';
+        $ctrlFile    = $tmpDir . '/Modules/Auth/AuthController.php';
+
+        file_put_contents($authSvcFile, "<?php\nnamespace {$ns};\nclass AuthService {}");
+        file_put_contents($paySvcFile,  "<?php\nnamespace {$payNs};\nclass PaymentService {}");
+        file_put_contents($ctrlFile, <<<PHP
+            <?php
+            namespace {$ns};
+            class AuthController {
+                public function __construct(
+                    private AuthService \$auth,
+                ) {}
+            }
+            PHP);
+
+        require_once $authSvcFile;
+        require_once $paySvcFile;
+        require_once $ctrlFile;
+
+        $ctrlFqn = $ns . '\\AuthController';
+
+        $tracer = new DependencyTracer($tmpDir);
+
+        // With module boundary → only Modules/Auth/ files
+        $files = $tracer->trace([$ctrlFqn], maxDepth: 2, moduleRoot: 'Modules/Auth');
+
+        $paths = array_keys($files);
+        foreach ($paths as $path) {
+            $this->assertStringStartsWith('Modules/Auth/', $path,
+                "File outside Modules/Auth/ must not appear in scope: {$path}"
+            );
+        }
+
+        // Clean up
+        array_map('unlink', [$authSvcFile, $paySvcFile, $ctrlFile]);
+        rmdir($tmpDir . '/Modules/Auth/Services');
+        rmdir($tmpDir . '/Modules/Auth');
+        rmdir($tmpDir . '/Modules/Payments/Services');
+        rmdir($tmpDir . '/Modules/Payments');
+        rmdir($tmpDir . '/Modules');
+        rmdir($tmpDir);
+    }
+
+    // ─── Forbidden write-gate ─────────────────────────────────────────────────
+
+    /** @test */
+    public function test_forbidden_paths_are_blocked(): void
+    {
+        // Use reflection to call the private isForbiddenWrite method
+        $cmd    = $this->app->make(RefactorCommand::class);
+        $method = new \ReflectionMethod($cmd, 'isForbiddenWrite');
+
+        // Exact global files → forbidden
+        $this->assertTrue($method->invoke($cmd, 'routes/web.php'));
+        $this->assertTrue($method->invoke($cmd, 'routes/api.php'));
+        $this->assertTrue($method->invoke($cmd, 'app/Providers/RouteServiceProvider.php'));
+        $this->assertTrue($method->invoke($cmd, 'app/Providers/AppServiceProvider.php'));
+        $this->assertTrue($method->invoke($cmd, 'app/Http/Kernel.php'));
+        $this->assertTrue($method->invoke($cmd, 'app/Console/Kernel.php'));
+        $this->assertTrue($method->invoke($cmd, 'bootstrap/app.php'));
+
+        // Pattern matches → forbidden
+        $this->assertTrue($method->invoke($cmd, 'config/app.php'));
+        $this->assertTrue($method->invoke($cmd, 'config/database.php'));
+        $this->assertTrue($method->invoke($cmd, 'app/Providers/CustomServiceProvider.php'));
+        $this->assertTrue($method->invoke($cmd, 'app/Http/Middleware/AuthMiddleware.php'));
+        $this->assertTrue($method->invoke($cmd, 'database/migrations/2023_01_01_create_users.php'));
+
+        // Module files → allowed
+        $this->assertFalse($method->invoke($cmd, 'Modules/UserAuthentication/Http/Controllers/ApiAuthController.php'));
+        $this->assertFalse($method->invoke($cmd, 'Modules/UserAuthentication/Services/AuthService.php'));
+        $this->assertFalse($method->invoke($cmd, 'app/Http/Controllers/HomeController.php'));
     }
 }

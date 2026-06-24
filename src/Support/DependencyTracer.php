@@ -30,6 +30,13 @@ class DependencyTracer
     private array $visited = [];
 
     /**
+     * When set, only files whose relative path starts with this prefix are included.
+     * Enforces the module-boundary rule: a module-scoped refactor must never pull in
+     * files from other modules or from the global app/ infrastructure.
+     */
+    private ?string $moduleRoot = null;
+
+    /**
      * Namespace prefixes owned by the framework / vendor libraries.
      * Classes under these namespaces are never included in the scope —
      * they live in vendor/ and are not project code.
@@ -62,20 +69,44 @@ class DependencyTracer
     /**
      * Trace the full dependency chain for the given FQCNs.
      *
-     * @param  string[] $classes   Fully-qualified class names to start from (controllers)
-     * @param  int      $maxDepth  Maximum hops to follow. 2 = Controller → Service → Repository.
+     * @param  string[]    $classes      Fully-qualified class names to start from (controllers)
+     * @param  int         $maxDepth     Maximum hops to follow. 2 = Controller → Service → Repository.
+     * @param  string|null $moduleRoot   If set, ONLY include files whose relative path starts with
+     *                                   this prefix (e.g. "Modules/UserAuthentication").
+     *                                   Files outside the module boundary are skipped entirely —
+     *                                   they are not in scope for a module-scoped refactoring.
      * @return array<string, string>  [ 'relative/path.php' => 'file contents' ]
      */
-    public function trace(array $classes, int $maxDepth = 2): array
+    public function trace(array $classes, int $maxDepth = 2, ?string $moduleRoot = null): array
     {
-        $this->visited = [];
-        $files         = [];
+        $this->visited    = [];
+        $this->moduleRoot = $moduleRoot ? ltrim($moduleRoot, '/') : null;
+        $files            = [];
 
         foreach ($classes as $class) {
             $this->traceClass($class, $files, 0, $maxDepth);
         }
 
         return $files;
+    }
+
+    /**
+     * Detect the module root for a given absolute file path.
+     *
+     * Given: /abs/project/Modules/UserAuthentication/Http/Controllers/APIAuthController.php
+     * Returns: "Modules/UserAuthentication"
+     *
+     * Returns null for files in app/, src/, or other non-modular locations.
+     */
+    public function detectModuleRoot(string $absFile): ?string
+    {
+        $rel = ltrim(str_replace($this->projectRoot, '', $absFile), '/');
+
+        if (preg_match('#^(Modules/[^/]+)/#', $rel, $m)) {
+            return $m[1];
+        }
+
+        return null;
     }
 
     // ─── Private ─────────────────────────────────────────────────────────────
@@ -110,7 +141,16 @@ class DependencyTracer
 
         // Include only files inside the project — never vendor/
         if ($file && str_starts_with($file, $this->projectRoot)) {
-            $relPath         = ltrim(str_replace($this->projectRoot, '', $file), '/');
+            $relPath = ltrim(str_replace($this->projectRoot, '', $file), '/');
+
+            // Module-boundary enforcement: when $moduleRoot is set, only include
+            // files that live within that module. Dependencies from other modules
+            // or from the global app/ layer are skipped — they must not be modified
+            // during a single-module refactoring operation.
+            if ($this->moduleRoot !== null && ! str_starts_with($relPath, $this->moduleRoot . '/')) {
+                return;
+            }
+
             $files[$relPath] = file_get_contents($file);
         }
 

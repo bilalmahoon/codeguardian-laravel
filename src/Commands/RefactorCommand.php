@@ -29,6 +29,57 @@ use Illuminate\Support\Facades\File;
  */
 class RefactorCommand extends Command
 {
+    // ─── Hard write-gate ─────────────────────────────────────────────────────
+    // These files/patterns are NEVER written regardless of what analysis finds.
+    // Modifying global routing infrastructure, providers, or kernel files is
+    // out of scope for a scoped API/module refactoring operation and can break
+    // the entire application if changed incorrectly.
+
+    /** Exact relative paths that are always forbidden from being written. */
+    private const FORBIDDEN_EXACT = [
+        'routes/web.php',
+        'routes/api.php',
+        'routes/console.php',
+        'app/Providers/RouteServiceProvider.php',
+        'app/Providers/AppServiceProvider.php',
+        'app/Http/Kernel.php',
+        'app/Console/Kernel.php',
+        'bootstrap/app.php',
+    ];
+
+    /** Path prefix patterns — any file whose relative path contains one of these is forbidden. */
+    private const FORBIDDEN_PREFIXES = [
+        'config/',
+        'app/Providers/',
+        'app/Http/Middleware/',
+        'bootstrap/',
+        'database/migrations/',
+        'database/seeders/',
+    ];
+
+    /**
+     * Check if a relative file path is forbidden from being written.
+     * Applied before EVERY static fix write and EVERY AI write.
+     */
+    private function isForbiddenWrite(string $relPath): bool
+    {
+        $norm = ltrim(str_replace('\\', '/', $relPath), '/');
+
+        foreach (self::FORBIDDEN_EXACT as $exact) {
+            if ($norm === $exact) {
+                return true;
+            }
+        }
+
+        foreach (self::FORBIDDEN_PREFIXES as $prefix) {
+            if (str_starts_with($norm, $prefix)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     protected $signature = 'codeguardian:refactor
                             {--path=              : Project root directory (default: base_path())}
                             {--module=            : Refactor a specific module only (e.g. User, Order)}
@@ -105,6 +156,11 @@ class RefactorCommand extends Command
                 ? '✔ Laravel Router + PHP Reflection (exact)'
                 : '⚠ Regex fallback (Laravel Router unavailable)';
             $this->info("  Resolver: {$method}");
+        }
+
+        // Show module boundary — enforced by DependencyTracer and write-gate
+        if (! empty($context['module_root'])) {
+            $this->info("  Module  : {$context['module_root']}  (only files within this module are in scope)");
         }
 
         $this->info("  Files   : {$context['summary']['total_files']}");
@@ -468,6 +524,18 @@ class RefactorCommand extends Command
                 continue;
             }
 
+            // ── Hard write-gate ──────────────────────────────────────────────
+            // Global routes, service providers, kernel files, config/, and
+            // middleware are NEVER written — they are infrastructure, not
+            // request-handler code. Modifying them during a scoped API
+            // refactoring would silently break the entire application.
+            if ($this->isForbiddenWrite($filePath)) {
+                $this->warn("  ⛔ SKIPPED (protected infrastructure file): {$filePath}");
+                $this->line("     Route/Provider/Kernel/config files are never modified.");
+                $this->line("     If a real issue exists here, fix it manually.");
+                continue;
+            }
+
             $originalContent = File::get($fullPath);
 
             // ── Disk backup BEFORE any change ───────────────────────────────
@@ -676,6 +744,10 @@ class RefactorCommand extends Command
 
                     if (! str_starts_with($fullPath, $projectRealPath)) {
                         continue;
+                    }
+
+                    if ($this->isForbiddenWrite($relPath)) {
+                        continue; // silently skip infrastructure in deep-chain pass
                     }
 
                     $this->newLine();
@@ -914,12 +986,14 @@ class RefactorCommand extends Command
         try {
             $agent     = new RefactorAgent();
             $apiFilter = $this->option('api') ?: null;
-            $result    = $agent->refactorFile(
+            $moduleRoot = $context['module_root'] ?? null;
+            $result     = $agent->refactorFile(
                 $filePath,
                 $currentContent,
                 array_values($relevantIssues),
                 $apiFilter,
-                $relatedContextFiles
+                $relatedContextFiles,
+                $moduleRoot
             );
 
             if (! empty($result['error'])) {
@@ -975,6 +1049,12 @@ class RefactorCommand extends Command
 
             // User confirmed "Proceed with refactoring?" at Step 3.
             // No second confirmation here — AI changes are applied automatically.
+
+            // Final gate — AI must never write to global infrastructure files
+            if ($this->isForbiddenWrite($filePath)) {
+                $this->warn("  ⛔ AI write blocked (protected infrastructure file): {$filePath}");
+                return [];
+            }
 
             // Write AI-refactored content
             File::put($fullPath, $aiContent);

@@ -148,9 +148,17 @@ class CodeScanner
         $resolved = $resolver->resolve($apiFilter);
 
         if (! empty($resolved)) {
-            $tracer         = new DependencyTracer($projectRoot);
-            $classes        = array_unique(array_column($resolved, 'class'));
-            $files          = $tracer->trace($classes, maxDepth: 2);
+            $tracer  = new DependencyTracer($projectRoot);
+            $classes = array_unique(array_column($resolved, 'class'));
+
+            // Auto-detect module boundary from the route handler's file path.
+            // If the handler lives in Modules/UserAuthentication/..., the tracer
+            // will ONLY follow dependencies also inside Modules/UserAuthentication/.
+            // This prevents cross-module contamination and protects global providers.
+            $handlerFile = $resolved[0]['file'] ?? null;
+            $moduleRoot  = $handlerFile ? $tracer->detectModuleRoot($handlerFile) : null;
+
+            $files          = $tracer->trace($classes, maxDepth: 2, moduleRoot: $moduleRoot);
             $resolvedRoutes = $resolved;
         }
 
@@ -186,7 +194,8 @@ class CodeScanner
             'files'             => $files,
             'summary'           => $summary,
             'scope'             => 'api',
-            'resolution_method' => 'router+reflection',  // vs 'regex_fallback'
+            'resolution_method' => 'router+reflection',
+            'module_root'       => $moduleRoot,
             'file_reasons'      => $fileReasons,
         ];
     }

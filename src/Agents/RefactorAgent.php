@@ -18,9 +18,52 @@ class RefactorAgent extends BasePackageAgent
     protected function getSystemPrompt(): string
     {
         return <<<'PROMPT'
-You are a Principal Software Engineer AND Senior QA Engineer with 15+ years of Laravel production experience.
+You are a Principal Software Engineer AND Senior QA Engineer with 15+ years of Laravel production experience,
+specialising in MODULAR Laravel architectures (nWidart-style Modules/).
 
 You have been handed a production PHP file for a critical code review and refactoring. Review it as if it will serve millions of requests per day and is shipping to production tomorrow. Be brutally honest. Surface every real problem.
+
+══════════════════════════════════════════════════
+ MODULE ARCHITECTURE — ABSOLUTE RULES
+══════════════════════════════════════════════════
+
+This project uses a modular architecture: Modules/{ModuleName}/Http/, Services/, Routes/, Models/, etc.
+Each module is isolated and self-contained. You MUST enforce these rules without exception:
+
+**What you are allowed to touch (only these):**
+- The single file explicitly given to you as "FILE TO REFACTOR"
+- Service / Repository files listed under "RELATED FILES" that belong to THE SAME MODULE
+- You may propose new files (FormRequest, Service) — but only within the same module directory
+
+**What you are ABSOLUTELY FORBIDDEN from touching:**
+- routes/web.php, routes/api.php (global route files)
+- app/Providers/RouteServiceProvider.php
+- app/Providers/AppServiceProvider.php
+- app/Http/Kernel.php, app/Console/Kernel.php
+- config/*.php (any configuration file)
+- Any file in a DIFFERENT module (Modules/OtherModule/...)
+- Any middleware file (app/Http/Middleware/...)
+- Database migrations or seeders
+
+**Fix at the lowest possible layer:**
+  Route → Controller → Service → Model
+  If an issue is in the Service, fix the Service — do NOT rewrite the Controller to work around it.
+  If an issue is in the Model, fix the Model — do NOT duplicate logic in the Service.
+
+**Cross-module rule:**
+  Do NOT move logic between modules.
+  Do NOT merge modules.
+  If a dependency from another module is involved, note it as a finding — do NOT modify that file.
+
+**Route rule:**
+  Never suggest changing route definitions to fix a code quality issue.
+  Route files are infrastructure — report route-level problems as an architectural note only.
+
+**If you spot an issue in a global infrastructure file (RouteServiceProvider, Kernel, etc.):**
+  → Report it in "architectural_notes" only.
+  → Do NOT include it in "changes".
+  → Do NOT modify its code in "refactored_file".
+  → The write system will reject it anyway — but you must not even propose it.
 
 ══════════════════════════════════════════════════
  PRINCIPAL SOFTWARE ENGINEER — WHAT TO FIX
@@ -140,6 +183,7 @@ PROMPT;
         $issues       = $context['issues']        ?? [];
         $apiRoute     = $context['api_route']     ?? null;
         $relatedFiles = $context['related_files'] ?? [];
+        $moduleRoot   = $context['module_root']   ?? null;
 
         // Build the issues block with full detail
         $issuesBlock = '';
@@ -193,7 +237,11 @@ PROMPT;
         }
 
         $routeContext = $apiRoute
-            ? "This file is part of the API endpoint: {$apiRoute}\n"
+            ? "API endpoint being refactored: {$apiRoute}\n"
+            : '';
+
+        $moduleContext = $moduleRoot
+            ? "Module boundary: {$moduleRoot}/  — only files within this path may be modified.\n"
             : '';
 
         $issueIntro = count($issues) > 0
@@ -218,7 +266,7 @@ SECTION
             : '';
 
         return <<<PROMPT
-{$routeContext}
+{$routeContext}{$moduleContext}
 Act as a Principal Software Engineer + Senior QA Engineer.
 {$issueIntro}
 Review this as if it serves millions of requests per day and ships to production tomorrow.
@@ -256,8 +304,9 @@ PROMPT;
         string  $filePath,
         string  $fileContent,
         array   $issues,
-        ?string $apiRoute = null,
-        array   $relatedFiles = []
+        ?string $apiRoute     = null,
+        array   $relatedFiles = [],
+        ?string $moduleRoot   = null
     ): array {
         return $this->analyze([
             'file_path'     => $filePath,
@@ -265,6 +314,7 @@ PROMPT;
             'issues'        => $issues,
             'api_route'     => $apiRoute,
             'related_files' => $relatedFiles,
+            'module_root'   => $moduleRoot,
         ]);
     }
 }
