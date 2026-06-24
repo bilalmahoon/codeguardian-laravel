@@ -119,14 +119,71 @@ class CodeScanner
     }
 
     /**
-     * Build context for specific APIs (routes + their controller files only).
+     * Build context for specific APIs (routes + their full call chain).
+     *
+     * Resolution strategy — two passes, most-accurate first:
+     *
+     *   PRIMARY (Router + Reflection):
+     *     Uses Laravel's own Router to find the exact controller@method, then
+     *     uses PHP's ReflectionClass to walk the constructor dependency chain
+     *     (Controller → Service → Repository). Zero false-positives; no guessing.
+     *
+     *   FALLBACK (regex file parser):
+     *     Used when the Laravel app is not fully bootstrapped (e.g. unit-test
+     *     context). Parses route definition files with regex, then does a
+     *     keyword-based file search as a last resort.
      */
     public function buildContextForApi(
         string $projectRoot,
         string $apiFilter
     ): array {
-        $extractor    = new RouteExtractor($projectRoot);
-        $allRoutes    = $extractor->extractAll();
+        $resolvedRoutes = [];
+        $files          = [];
+
+        // ── PRIMARY: Laravel Router → PHP Reflection ──────────────────────────
+        // Laravel's Router is the authoritative source for which controller
+        // handles a URI. ReflectionClass walks the constructor dependency chain
+        // automatically. No regex; no keyword guessing; no false-positives.
+        $resolver = new RouteResolver($projectRoot);
+        $resolved = $resolver->resolve($apiFilter);
+
+        if (! empty($resolved)) {
+            $tracer         = new DependencyTracer($projectRoot);
+            $classes        = array_unique(array_column($resolved, 'class'));
+            $files          = $tracer->trace($classes, maxDepth: 2);
+            $resolvedRoutes = $resolved;
+        }
+
+        // ── FALLBACK: regex-based file parser ────────────────────────────────
+        // Only reached when the Router is unavailable (no bootstrapped Laravel app).
+        if (empty($files)) {
+            return $this->buildContextForApiViaRegex($projectRoot, $apiFilter);
+        }
+
+        $summary = $this->buildSummary($files, 'laravel');
+
+        return [
+            'project_type'   => 'laravel',
+            'project_name'   => basename($projectRoot) . " [{$apiFilter}]",
+            'scan_path'      => $projectRoot,
+            'api_filter'     => $apiFilter,
+            'routes'         => $resolvedRoutes,
+            'files'          => $files,
+            'summary'        => $summary,
+            'scope'          => 'api',
+        ];
+    }
+
+    /**
+     * Regex-based fallback for buildContextForApi.
+     * Used when the Laravel app is not bootstrapped (e.g. unit tests).
+     * Parses route definition files with regex, then uses keyword search as a
+     * last resort. Includes related services found via use-statement scanning.
+     */
+    private function buildContextForApiViaRegex(string $projectRoot, string $apiFilter): array
+    {
+        $extractor      = new RouteExtractor($projectRoot);
+        $allRoutes      = $extractor->extractAll();
         $filteredRoutes = $extractor->filter($allRoutes, $apiFilter);
 
         if (empty($filteredRoutes)) {
@@ -135,9 +192,8 @@ class CodeScanner
             );
         }
 
-        // Collect only the controller files involved
-        $files            = [];
-        $hasUnresolved    = false;
+        $files         = [];
+        $hasUnresolved = false;
 
         foreach ($filteredRoutes as $route) {
             $controllerFile = $extractor->resolveControllerFile($route);
@@ -151,16 +207,10 @@ class CodeScanner
             }
         }
 
-        // Fallback: run ONLY when direct route resolution found zero files.
-        // If even one file was resolved directly (e.g. APIAuthController found via route
-        // definition), we trust that result and skip the keyword search entirely.
-        // Running the fallback on a partially-resolved scope adds noise:
-        //   "login" would also match LoginController, AuthController, etc., even though
-        //   the real handler was already found.
+        // Keyword fallback ONLY when direct resolution found zero files
         if (empty($files) && $hasUnresolved) {
             $keywords = $this->extractUriKeywords($apiFilter);
             if (! empty($keywords)) {
-                // array_merge with $files last so directly-resolved controllers take precedence
                 $fallback = $this->findControllersByUriKeywords($projectRoot, $keywords);
                 $files    = array_merge($fallback, $files);
             }
@@ -176,8 +226,9 @@ class CodeScanner
             );
         }
 
-        // Also include service files likely called by these controllers
+        // Pull in service / repository files via use-statement scanning
         $files = array_merge($files, $this->findRelatedServices($projectRoot, $files));
+
         $summary = $this->buildSummary($files, 'laravel');
 
         return [
