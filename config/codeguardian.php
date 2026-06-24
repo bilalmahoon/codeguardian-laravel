@@ -142,4 +142,55 @@ return [
         'format' => 'both',
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Web Dashboard
+    |--------------------------------------------------------------------------
+    | A browser UI to run scans/refactors, watch live progress, and browse the
+    | full history of past runs with their results — instead of the terminal.
+    |
+    | Visit: <your-app-url>/codeguardian
+    */
+
+    'dashboard' => [
+        // Master switch. Disable to remove the routes entirely.
+        'enabled' => env('CODEGUARDIAN_DASHBOARD', true),
+
+        // URL prefix the dashboard is mounted at.
+        'path' => env('CODEGUARDIAN_DASHBOARD_PATH', 'codeguardian'),
+
+        // Middleware applied to every dashboard route. 'web' gives sessions/CSRF.
+        // The package also applies its own authorization gate (see below).
+        'middleware' => ['web'],
+
+        // Authorization. By default the dashboard is only reachable in the
+        // 'local' environment. To open it elsewhere, define a Gate named
+        // 'viewCodeGuardian' in your AuthServiceProvider, OR set
+        // 'restrict_to_local' => false (NOT recommended for production).
+        'restrict_to_local' => env('CODEGUARDIAN_DASHBOARD_LOCAL_ONLY', true),
+
+        // Where run history + live logs are stored (relative to storage_path()).
+        'runs_dir' => 'codeguardian/runs',
+
+        // Absolute path to the PHP binary used to launch background runs.
+        // Auto-detected (PHP_BINARY) when null.
+        'php_binary' => env('CODEGUARDIAN_PHP_BINARY'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Foolproof Refactoring (test-first safety net)
+    |--------------------------------------------------------------------------
+    | When "safe" mode is on, each file is verified by generated + existing
+    | tests AFTER refactoring; if the refactor introduces a NEW test failure,
+    | that file is automatically rolled back to its original content. This is
+    | what the dashboard uses so refactored code never ships a regression.
+    */
+
+    'refactor' => [
+        'safe_mode'             => env('CODEGUARDIAN_SAFE_MODE', true),
+        // Auto-rollback a file if refactoring introduces a new test failure.
+        'auto_rollback_on_fail' => env('CODEGUARDIAN_AUTO_ROLLBACK', true),
+    ],
+
 ];

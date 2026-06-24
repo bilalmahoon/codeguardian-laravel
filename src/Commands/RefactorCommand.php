@@ -87,6 +87,7 @@ class RefactorCommand extends Command
                             {--file=              : Refactor a single file + its dependency chain (e.g. app/Services/AuthService.php)}
                             {--type=              : Project type: laravel or flutter}
                             {--mode=              : Execution mode: interactive (default) or auto}
+                            {--safe                 : Foolproof mode — auto-rollback any file whose refactor introduces a NEW test failure (no prompts)}
                             {--no-backup            : Skip creating backups before modifying files}
                             {--skip-tests           : Skip test execution (not recommended)}
                             {--with-existing-tests  : Also run the project existing tests (tests/Feature, tests/Unit) to detect breaking changes}';
@@ -99,6 +100,8 @@ class RefactorCommand extends Command
     private bool   $backupEnabled;
     private bool   $testsEnabled;
     private bool   $existingTestsEnabled;
+    /** Foolproof mode: auto-rollback any file that introduces a new test failure */
+    private bool   $safeMode;
     /** Whether an AI provider is configured and mode allows AI refactoring */
     private bool   $aiEnabled;
     /** 'static' | 'ai' | 'hybrid' */
@@ -127,6 +130,11 @@ class RefactorCommand extends Command
         $this->backupEnabled        = ! $this->option('no-backup');
         $this->testsEnabled         = ! $this->option('skip-tests');
         $this->existingTestsEnabled = (bool) $this->option('with-existing-tests');
+        // Foolproof safe mode: explicit --safe flag, or config default, or any
+        // non-interactive run (e.g. the web dashboard) where we can't prompt.
+        $this->safeMode             = (bool) $this->option('safe')
+                                    || (bool) config('codeguardian.refactor.safe_mode', false)
+                                    || ($this->option('mode') === 'auto');
         $this->backups              = [];
         $this->orchestrator         = new StaticOrchestrator();
 
@@ -183,6 +191,10 @@ class RefactorCommand extends Command
             $this->info("  Engine  : ⚡ Static + 🤖 AI deep-refactoring ({$provider} / {$model})");
         } else {
             $this->info("  Engine  : ⚡ Static only  (set CODEGUARDIAN_MODE=hybrid + API key for AI)");
+        }
+
+        if ($this->safeMode) {
+            $this->info("  Safety  : 🛡  Foolproof — files that break a test are auto-rolled-back");
         }
         $this->newLine();
 
@@ -739,18 +751,35 @@ class RefactorCommand extends Command
                         }
                     }
 
-                    $choice = $this->choice(
-                        'What do you want to do?',
-                        ['Rollback this file', 'Continue anyway', 'Stop refactoring'],
-                        0
-                    );
+                    // ── Foolproof safe mode ──────────────────────────────────
+                    // The whole point of "test → refactor → verify" is that a
+                    // refactor that breaks a test must NOT ship. In safe mode
+                    // (the dashboard, --safe, or any non-interactive run) we
+                    // automatically restore the original file so the refactored
+                    // code is always green.
+                    if ($this->safeMode || ! $this->interactiveMode) {
+                        if (config('codeguardian.refactor.auto_rollback_on_fail', true)) {
+                            $this->rollbackFile($filePath, $fullPath);
+                            $refactorResults[$filePath]['status'] = 'rolled_back';
+                            $this->warn("  ↩  Auto-rolled back {$filePath} (refactor introduced {$newCount} new failure(s); original restored).");
+                        } else {
+                            $refactorResults[$filePath]['status'] = 'failed_verification';
+                            $this->warn("  ⚠  Kept changes despite {$newCount} new failure(s) (auto-rollback disabled).");
+                        }
+                    } else {
+                        $choice = $this->choice(
+                            'What do you want to do?',
+                            ['Rollback this file', 'Continue anyway', 'Stop refactoring'],
+                            0
+                        );
 
-                    if ($choice === 'Rollback this file') {
-                        $this->rollbackFile($filePath, $fullPath);
-                        $refactorResults[$filePath]['status'] = 'rolled_back';
-                    } elseif ($choice === 'Stop refactoring') {
-                        $this->stopRefactoring();
-                        return $refactorResults;
+                        if ($choice === 'Rollback this file') {
+                            $this->rollbackFile($filePath, $fullPath);
+                            $refactorResults[$filePath]['status'] = 'rolled_back';
+                        } elseif ($choice === 'Stop refactoring') {
+                            $this->stopRefactoring();
+                            return $refactorResults;
+                        }
                     }
                 } elseif (! ($testResult['skipped'] ?? false)) {
                     // All failures are pre-existing — not our fault

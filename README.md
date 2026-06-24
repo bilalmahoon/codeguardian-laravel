@@ -23,6 +23,66 @@ A static code analysis package for Laravel projects. Runs directly in your exist
 
 ---
 
+## Web Dashboard
+
+Prefer a UI over the terminal? CodeGuardian ships a built-in dashboard. After installing the package, just open:
+
+```
+https://your-app.test/codeguardian
+```
+
+From there you can:
+
+- **Run everything from the browser** — analyze, security audit, performance review, generate tests, and refactor (by API route, module, file, or whole project).
+- **Watch live progress** — each run executes in the background and streams its console output to the page in real time.
+- **Browse full history** — every past run is listed with its type, target, status, and a link to open its saved HTML/JSON report.
+
+### Security
+
+The dashboard is **local-only by default** (only reachable when `APP_ENV=local`). To control access:
+
+- Define a Gate named `viewCodeGuardian` in your `AuthServiceProvider` — it takes precedence and lets you restrict by user/role, **or**
+- Set `CODEGUARDIAN_DASHBOARD_LOCAL_ONLY=false` to open it (combine with the gate or your own middleware for production).
+
+Config (`config/codeguardian.php` → `dashboard`):
+
+```php
+'dashboard' => [
+    'enabled'           => env('CODEGUARDIAN_DASHBOARD', true),
+    'path'              => env('CODEGUARDIAN_DASHBOARD_PATH', 'codeguardian'),
+    'middleware'        => ['web'],
+    'restrict_to_local' => env('CODEGUARDIAN_DASHBOARD_LOCAL_ONLY', true),
+],
+```
+
+Customise the UI by publishing the views: `php artisan vendor:publish --tag=codeguardian-views`.
+
+---
+
+## Foolproof Refactoring (test-first safety net)
+
+Refactors run a **test → refactor → verify** loop so a change that breaks a test never ships:
+
+1. Generate test stubs for the files in scope.
+2. Establish a baseline (pre-existing failures are ignored — only NEW failures count).
+3. Refactor each file (static auto-fixes + AI deep refactor).
+4. Re-run tests; if a file's refactor introduces a **new** failure, it is **automatically rolled back** to the original.
+
+Enabled automatically from the dashboard, with `--safe`, in `--mode=auto`, or via config:
+
+```php
+'refactor' => [
+    'safe_mode'             => env('CODEGUARDIAN_SAFE_MODE', true),
+    'auto_rollback_on_fail' => env('CODEGUARDIAN_AUTO_ROLLBACK', true),
+],
+```
+
+```bash
+php artisan codeguardian:refactor --api=v1/auth/login --safe
+```
+
+---
+
 ## Requirements
 
 | Requirement | Version |

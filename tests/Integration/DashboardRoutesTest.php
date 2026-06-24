@@ -1,0 +1,84 @@
+<?php
+
+declare(strict_types=1);
+
+namespace CodeGuardian\Laravel\Tests\Integration;
+
+use Orchestra\Testbench\TestCase;
+
+/**
+ * Integration tests for the web dashboard, booted inside a real Laravel app
+ * (Orchestra Testbench). Verifies the routes register, the authorization gate
+ * behaves, and the history/new-run pages render.
+ */
+class DashboardRoutesTest extends TestCase
+{
+    protected function getPackageProviders($app): array
+    {
+        return [\CodeGuardian\Laravel\CodeGuardianServiceProvider::class];
+    }
+
+    protected function defineEnvironment($app): void
+    {
+        // The dashboard uses the 'web' middleware group (sessions/CSRF/cookie
+        // encryption), which requires an app key.
+        $app['config']->set('app.key', 'base64:' . base64_encode(random_bytes(32)));
+
+        // Dashboard is local-only by default; run the app as local so it's open.
+        // environment() reads the container 'env' binding, not config('app.env').
+        $app['env'] = 'local';
+        $app['config']->set('app.env', 'local');
+        $app['config']->set('codeguardian.dashboard.enabled', true);
+        $app['config']->set('codeguardian.dashboard.restrict_to_local', true);
+    }
+
+    /** @test */
+    public function test_history_page_renders(): void
+    {
+        $this->get('/codeguardian')
+            ->assertOk()
+            ->assertSee('CodeGuardian')
+            ->assertSee('history', false);
+    }
+
+    /** @test */
+    public function test_new_run_page_renders_with_operations(): void
+    {
+        $this->get('/codeguardian/new')
+            ->assertOk()
+            ->assertSee('New run')
+            ->assertSee('Refactor');
+    }
+
+    /** @test */
+    public function test_unknown_run_returns_404(): void
+    {
+        $this->get('/codeguardian/runs/does-not-exist')->assertNotFound();
+    }
+
+    /** @test */
+    public function test_status_endpoint_404_for_unknown_run(): void
+    {
+        $this->getJson('/codeguardian/runs/nope/status')->assertNotFound();
+    }
+
+    /** @test */
+    public function test_dashboard_disabled_returns_404(): void
+    {
+        config(['codeguardian.dashboard.enabled' => false]);
+
+        // Route group is registered at boot based on config; when disabled the
+        // routes are never registered, so the path 404s.
+        $this->get('/codeguardian')->assertNotFound();
+    }
+
+    /** @test */
+    public function test_non_local_is_forbidden_when_restricted(): void
+    {
+        // Simulate production with local-only restriction and no gate defined.
+        $this->app['env'] = 'production';
+        config(['codeguardian.dashboard.restrict_to_local' => true]);
+
+        $this->get('/codeguardian')->assertForbidden();
+    }
+}

@@ -16,8 +16,11 @@ use CodeGuardian\Laravel\Commands\PerformanceScanCommand;
 use CodeGuardian\Laravel\Commands\RefactorCommand;
 use CodeGuardian\Laravel\Commands\ReportCommand;
 use CodeGuardian\Laravel\Commands\SecurityScanCommand;
+use CodeGuardian\Laravel\Http\Middleware\Authorize;
 use CodeGuardian\Laravel\Support\CachedPhpParser;
 use CodeGuardian\Laravel\Support\FileTypeDetector;
+use CodeGuardian\Laravel\Support\RunStore;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 
 class CodeGuardianServiceProvider extends ServiceProvider
@@ -47,15 +50,26 @@ class CodeGuardianServiceProvider extends ServiceProvider
             $app->make(TechDebtAnalyzer::class),
             $app->make(StaticTestGenerator::class),
         ));
+
+        // Web dashboard run/history store
+        $this->app->singleton(RunStore::class, fn() => RunStore::fromConfig());
     }
 
     public function boot(): void
     {
+        $this->loadViewsFrom(__DIR__ . '/../resources/views', 'codeguardian');
+        $this->registerDashboardRoutes();
+
         if ($this->app->runningInConsole()) {
             // Publish config
             $this->publishes([
                 __DIR__ . '/../config/codeguardian.php' => config_path('codeguardian.php'),
             ], 'codeguardian-config');
+
+            // Publish views (optional — for customising the dashboard UI)
+            $this->publishes([
+                __DIR__ . '/../resources/views' => resource_path('views/vendor/codeguardian'),
+            ], 'codeguardian-views');
 
             // Register artisan commands
             $this->commands([
@@ -67,5 +81,32 @@ class CodeGuardianServiceProvider extends ServiceProvider
                 ReportCommand::class,
             ]);
         }
+    }
+
+    /**
+     * Register the browser dashboard routes (guarded by config + middleware).
+     * Mounted at the configured path (default: /codeguardian).
+     */
+    private function registerDashboardRoutes(): void
+    {
+        if (! config('codeguardian.dashboard.enabled', true)) {
+            return;
+        }
+
+        // The Authorize middleware needs an alias so route middleware can use it.
+        $router = $this->app['router'];
+        $router->aliasMiddleware('codeguardian.auth', Authorize::class);
+
+        $middleware = array_merge(
+            (array) config('codeguardian.dashboard.middleware', ['web']),
+            ['codeguardian.auth']
+        );
+
+        Route::group([
+            'prefix'     => config('codeguardian.dashboard.path', 'codeguardian'),
+            'middleware' => $middleware,
+        ], function () {
+            $this->loadRoutesFrom(__DIR__ . '/../routes/web.php');
+        });
     }
 }
