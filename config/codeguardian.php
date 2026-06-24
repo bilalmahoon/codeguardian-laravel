@@ -39,6 +39,10 @@ return [
         'key'         => env('CODEGUARDIAN_OPENAI_KEY', env('OPENAI_API_KEY')),
         'model'       => env('CODEGUARDIAN_OPENAI_MODEL', 'gpt-4o'),
         'max_tokens'  => env('CODEGUARDIAN_MAX_TOKENS', 8192),
+        // Higher output budget for refactoring (full-file rewrites + generated
+        // files are large; too low a limit truncates the JSON and the rewrite
+        // is silently lost). Tune down only if your model rejects the value.
+        'refactor_max_tokens' => env('CODEGUARDIAN_REFACTOR_MAX_TOKENS', 16000),
         'temperature' => 0.1,
     ],
 
@@ -50,6 +54,10 @@ return [
         // Examples: claude-opus-4-5 | claude-3-7-sonnet-20250219 | claude-3-5-sonnet-20241022
         'model'       => env('CODEGUARDIAN_CLAUDE_MODEL', 'claude-opus-4-5'),
         'max_tokens'  => env('CODEGUARDIAN_MAX_TOKENS', 8192),
+        // Refactoring produces large full-file rewrites. Claude 3.7 / opus-4
+        // support 16k–64k output tokens; 16000 is a safe default that prevents
+        // mid-JSON truncation. Raise via CODEGUARDIAN_REFACTOR_MAX_TOKENS.
+        'refactor_max_tokens' => env('CODEGUARDIAN_REFACTOR_MAX_TOKENS', 16000),
         'temperature' => 0.1,
     ],
 
@@ -57,6 +65,7 @@ return [
         'key'         => env('CODEGUARDIAN_GEMINI_KEY', env('GEMINI_API_KEY')),
         'model'       => env('CODEGUARDIAN_GEMINI_MODEL', 'gemini-1.5-flash'),
         'max_tokens'  => env('CODEGUARDIAN_MAX_TOKENS', 8192),
+        'refactor_max_tokens' => env('CODEGUARDIAN_REFACTOR_MAX_TOKENS', 16000),
         'temperature' => 0.1,
         // Available models:
         // gemini-1.5-flash         ← default, free tier, fast

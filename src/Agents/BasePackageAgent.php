@@ -22,20 +22,40 @@ abstract class BasePackageAgent
     abstract protected function buildUserPrompt(array $context): string;
 
     /**
+     * Output token budget for this agent. Return null to use the provider's
+     * configured default. Agents that produce large output (full-file rewrites)
+     * override this to request a higher limit and avoid mid-JSON truncation.
+     */
+    protected function maxTokens(): ?int
+    {
+        return null;
+    }
+
+    /**
      * Run analysis and return structured findings.
      */
     public function analyze(array $context): array
     {
         $userPrompt = $this->buildUserPrompt($context);
-        $response   = $this->ai->complete($this->getSystemPrompt(), $userPrompt);
+        $response   = $this->ai->complete($this->getSystemPrompt(), $userPrompt, $this->maxTokens());
         $parsed     = AiClient::extractJson($response);
 
         if ($parsed === null) {
+            // Distinguish a truncated response (token limit) from genuinely
+            // malformed output — the fix is very different for the user.
+            $truncated = $this->ai->wasTruncated();
+            $error     = $truncated
+                ? 'AI response was truncated (hit the output token limit). '
+                  . 'Increase CODEGUARDIAN_REFACTOR_MAX_TOKENS in your .env, '
+                  . 'or refactor a smaller file/scope.'
+                : 'Could not parse AI response as JSON';
+
             return [
-                'agent'    => $this->getName(),
-                'error'    => 'Could not parse AI response as JSON',
-                'raw'      => substr($response, 0, 500),
-                'findings' => [],
+                'agent'     => $this->getName(),
+                'error'     => $error,
+                'truncated' => $truncated,
+                'raw'       => substr($response, 0, 500),
+                'findings'  => [],
             ];
         }
 

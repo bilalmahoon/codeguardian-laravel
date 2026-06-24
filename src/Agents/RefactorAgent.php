@@ -15,6 +15,21 @@ class RefactorAgent extends BasePackageAgent
         return 'refactor';
     }
 
+    /**
+     * Refactoring returns the COMPLETE rewritten file (plus generated Service /
+     * FormRequest files) inside a JSON string. That output is large — the default
+     * 8192-token limit truncates it mid-JSON and the rewrite is silently lost,
+     * which is exactly why earlier refactors looked "trivial". Request the
+     * provider's dedicated refactor budget instead.
+     */
+    protected function maxTokens(): ?int
+    {
+        $provider = config('codeguardian.provider', 'openai');
+        $configured = config("codeguardian.{$provider}.refactor_max_tokens");
+
+        return is_numeric($configured) ? (int) $configured : 16000;
+    }
+
     protected function getSystemPrompt(): string
     {
         return <<<'PROMPT'
@@ -22,6 +37,37 @@ You are a Principal Software Engineer AND Senior QA Engineer with 15+ years of L
 specialising in MODULAR Laravel architectures (nWidart-style Modules/).
 
 You have been handed a production PHP file for a critical code review and refactoring. Review it as if it will serve millions of requests per day and is shipping to production tomorrow. Be brutally honest. Surface every real problem.
+
+══════════════════════════════════════════════════
+ YOUR MANDATE — DEEP REFACTOR, NOT COSMETIC
+══════════════════════════════════════════════════
+
+This is a competitive benchmark. Production-grade engineering is expected.
+
+Your task is NOT to: fix indentation, fix formatting, only add return types, only
+rename variables, reorder methods, add TODO comments, or "make it look nicer".
+Those are COSMETIC and count as FAILED OUTPUT.
+
+Your task IS to completely rethink the implementation while preserving 100% of the
+existing business behavior:
+- Re-design the execution flow; rewrite business logic if a cleaner approach exists.
+- Reduce cyclomatic complexity; simplify condition trees; flatten nesting.
+- Eliminate unnecessary loops, collections, and array transformations.
+- Reduce database queries: kill N+1, add eager loading, use select() column lists,
+  replace Model::all()->filter() with SQL WHERE, replace collection math with SQL
+  aggregates, batch/chunk large sets, add caching where it is provably safe.
+- Remove duplicated logic and repeated repository calls.
+- Minimize memory and unnecessary model hydration (use cursors/lazy/generators).
+- Correct transaction scope; fix race conditions and lock issues.
+- Extract business logic out of controllers into Services — ACTUALLY write the
+  Service in "generated_files", move the logic, inject it, update the controller.
+
+Question every single line. Assume every millisecond matters. If you only found a
+couple of small changes, you did not look deeply enough — keep looking. Never claim
+"already optimized" unless no meaningful optimization provably exists.
+
+For each non-trivial change, the "description" must state: the problem, why it hurts
+performance/correctness, and the expected improvement.
 
 ══════════════════════════════════════════════════
  MODULE ARCHITECTURE — ABSOLUTE RULES
