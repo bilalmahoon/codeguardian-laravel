@@ -162,15 +162,32 @@ class CodeScanner
 
         $summary = $this->buildSummary($files, 'laravel');
 
+        // Build per-file reasons so the banner can show WHY each file is in scope.
+        // This is purely diagnostic — makes it trivial to spot wrong files.
+        $fileReasons = [];
+        foreach ($resolved as $r) {
+            $relPath = ltrim(str_replace($projectRoot, '', $r['file']), '/');
+            $fileReasons[$relPath] = "route handler ({$r['uri']} → {$r['method']})";
+        }
+        $handlerFiles = array_column($resolved, 'file');
+        $handlerFiles = array_map(fn($f) => ltrim(str_replace($projectRoot, '', $f), '/'), $handlerFiles);
+        foreach ($files as $relPath => $_) {
+            if (! isset($fileReasons[$relPath])) {
+                $fileReasons[$relPath] = 'constructor dependency (traced via Reflection)';
+            }
+        }
+
         return [
-            'project_type'   => 'laravel',
-            'project_name'   => basename($projectRoot) . " [{$apiFilter}]",
-            'scan_path'      => $projectRoot,
-            'api_filter'     => $apiFilter,
-            'routes'         => $resolvedRoutes,
-            'files'          => $files,
-            'summary'        => $summary,
-            'scope'          => 'api',
+            'project_type'      => 'laravel',
+            'project_name'      => basename($projectRoot) . " [{$apiFilter}]",
+            'scan_path'         => $projectRoot,
+            'api_filter'        => $apiFilter,
+            'routes'            => $resolvedRoutes,
+            'files'             => $files,
+            'summary'           => $summary,
+            'scope'             => 'api',
+            'resolution_method' => 'router+reflection',  // vs 'regex_fallback'
+            'file_reasons'      => $fileReasons,
         ];
     }
 
@@ -231,15 +248,22 @@ class CodeScanner
 
         $summary = $this->buildSummary($files, 'laravel');
 
+        $fileReasons = [];
+        foreach (array_keys($files) as $relPath) {
+            $fileReasons[$relPath] = 'regex fallback (Router unavailable)';
+        }
+
         return [
-            'project_type'   => 'laravel',
-            'project_name'   => basename($projectRoot) . " [{$apiFilter}]",
-            'scan_path'      => $projectRoot,
-            'api_filter'     => $apiFilter,
-            'routes'         => $filteredRoutes,
-            'files'          => $files,
-            'summary'        => $summary,
-            'scope'          => 'api',
+            'project_type'      => 'laravel',
+            'project_name'      => basename($projectRoot) . " [{$apiFilter}]",
+            'scan_path'         => $projectRoot,
+            'api_filter'        => $apiFilter,
+            'routes'            => $filteredRoutes,
+            'files'             => $files,
+            'summary'           => $summary,
+            'scope'             => 'api',
+            'resolution_method' => 'regex_fallback',
+            'file_reasons'      => $fileReasons,
         ];
     }
 

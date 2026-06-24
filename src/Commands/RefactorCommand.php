@@ -98,12 +98,23 @@ class RefactorCommand extends Command
         $context  = $this->buildContext($scanner, $scope);
 
         $this->info("  Scope   : {$scope['label']}");
+
+        // Show resolution method so we can see if Router or regex fallback was used
+        if (isset($context['resolution_method'])) {
+            $method = $context['resolution_method'] === 'router+reflection'
+                ? '✔ Laravel Router + PHP Reflection (exact)'
+                : '⚠ Regex fallback (Laravel Router unavailable)';
+            $this->info("  Resolver: {$method}");
+        }
+
         $this->info("  Files   : {$context['summary']['total_files']}");
 
-        // Show which files are in scope so the user can confirm it's the right set
+        // Show which files are in scope + WHY each was included
+        $reasons = $context['file_reasons'] ?? [];
         if (! empty($context['summary']['file_list'])) {
             foreach ($context['summary']['file_list'] as $f) {
-                $this->line("            → {$f}");
+                $reason = isset($reasons[$f]) ? "  ← {$reasons[$f]}" : '';
+                $this->line("            → {$f}{$reason}");
             }
         }
 
