@@ -151,6 +151,16 @@ class CodeScanner
             $tracer  = new DependencyTracer($projectRoot);
             $classes = array_unique(array_column($resolved, 'class'));
 
+            // Map each controller class to its resolved route method, so the tracer
+            // can follow METHOD-injected dependencies (action/feature pattern), not
+            // just constructor-injected ones. e.g. authenticateUser(BaseLogin $login).
+            $entryMethods = [];
+            foreach ($resolved as $r) {
+                if (! empty($r['class']) && ! empty($r['method'])) {
+                    $entryMethods[$r['class']] = $r['method'];
+                }
+            }
+
             // Auto-detect module boundary from the route handler's file path.
             // If the handler lives in Modules/UserAuthentication/..., the tracer
             // will ONLY follow dependencies also inside Modules/UserAuthentication/.
@@ -158,7 +168,12 @@ class CodeScanner
             $handlerFile = $resolved[0]['file'] ?? null;
             $moduleRoot  = $handlerFile ? $tracer->detectModuleRoot($handlerFile) : null;
 
-            $files          = $tracer->trace($classes, maxDepth: 2, moduleRoot: $moduleRoot);
+            $files = $tracer->trace(
+                $classes,
+                maxDepth: 2,
+                moduleRoot: $moduleRoot,
+                entryMethods: $entryMethods
+            );
             $resolvedRoutes = $resolved;
         }
 
@@ -181,7 +196,7 @@ class CodeScanner
         $handlerFiles = array_map(fn($f) => ltrim(str_replace($projectRoot, '', $f), '/'), $handlerFiles);
         foreach ($files as $relPath => $_) {
             if (! isset($fileReasons[$relPath])) {
-                $fileReasons[$relPath] = 'constructor dependency (traced via Reflection)';
+                $fileReasons[$relPath] = 'dependency (traced via Reflection)';
             }
         }
 

@@ -122,7 +122,8 @@ class ApiScopeIntegrationTest extends TestCase
         $fixturesRoot = realpath(__DIR__ . '/Fixtures');
         $tracer       = new DependencyTracer($fixturesRoot);
 
-        $files = $tracer->trace([ApiAuthController::class], maxDepth: 2);
+        $files = $tracer->trace([ApiAuthController::class], maxDepth: 2, moduleRoot: null,
+            entryMethods: [ApiAuthController::class => 'authenticateUser']);
 
         $filenames = array_map('basename', array_keys($files));
 

@@ -198,14 +198,32 @@ class RefactorCommand extends Command
         $this->printAnalysisSummary($analysisResults);
 
         $totalIssues = $analysisResults['summary']['total_issues'] ?? 0;
-        if ($totalIssues === 0) {
-            $this->info('  ✅  No issues found! Your code is clean.');
+
+        // When AI is enabled AND the user scoped to a specific API/file, the AI
+        // deep-refactoring pass is the whole point — the built-in static engine
+        // is intentionally basic. So we must NOT stop at "0 static issues"; let
+        // Claude perform its expert review. Only bail early for unscoped/no-AI runs.
+        $isScopedTarget = (bool) ($this->option('api') || $this->option('file'));
+        $aiWillReview   = $this->aiEnabled && $isScopedTarget;
+
+        if ($totalIssues === 0 && ! $aiWillReview) {
+            $this->info('  ✅  No static issues found.');
+            if ($this->aiEnabled) {
+                $this->line('  Tip: target a specific API or file (--api= / --file=) to run the AI deep review.');
+            }
             return self::SUCCESS;
+        }
+
+        if ($totalIssues === 0 && $aiWillReview) {
+            $this->info('  ✅  No static issues — handing off to AI for deep expert review...');
         }
 
         // ── Step 3: Ask to proceed ───────────────────────────────────────────
         if ($this->interactiveMode) {
-            if (! $this->confirm("  Proceed with refactoring {$totalIssues} issue(s)?", true)) {
+            $promptCount = $totalIssues > 0
+                ? "{$totalIssues} issue(s)"
+                : 'AI deep review';
+            if (! $this->confirm("  Proceed with refactoring ({$promptCount})?", true)) {
                 $this->info('  Refactoring cancelled.');
                 return self::SUCCESS;
             }

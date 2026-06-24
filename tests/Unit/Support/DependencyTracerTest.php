@@ -116,6 +116,51 @@ class DependencyTracerTest extends TestCase
     }
 
     /** @test */
+    public function test_traces_method_injected_dependency_on_route_handler(): void
+    {
+        // Action/feature pattern: the dependency is injected as a METHOD parameter
+        // of the route handler, NOT in the constructor.
+        //   public function authenticateUser(LoginRequest $r, BaseLogin $login)
+        $ns        = 'CgTracerTest' . uniqid();
+        $featureFqn = $ns . '\\BaseLogin';
+        $ctrlFqn    = $ns . '\\ApiAuthController';
+
+        $featureFile = $this->tmpDir . '/BaseLogin.php';
+        $ctrlFile    = $this->tmpDir . '/ApiAuthController.php';
+
+        file_put_contents($featureFile, "<?php\nnamespace {$ns};\nclass BaseLogin {}");
+        file_put_contents($ctrlFile, <<<PHP
+            <?php
+            namespace {$ns};
+            class ApiAuthController {
+                public function authenticateUser(BaseLogin \$login) {
+                    return \$login;
+                }
+            }
+            PHP);
+
+        require_once $featureFile;
+        require_once $ctrlFile;
+
+        $tracer = new DependencyTracer($this->tmpDir);
+
+        // WITHOUT entryMethods: constructor-only → only the controller is found
+        $ctorOnly = $tracer->trace([$ctrlFqn], 2);
+        $this->assertCount(1, $ctorOnly,
+            'Without entryMethods, method-injected BaseLogin must NOT be traced'
+        );
+
+        // WITH entryMethods: the route method params are followed → BaseLogin found
+        $withMethod = $tracer->trace([$ctrlFqn], 2, null, [$ctrlFqn => 'authenticateUser']);
+        $filenames  = array_map('basename', array_keys($withMethod));
+
+        $this->assertContains('ApiAuthController.php', $filenames);
+        $this->assertContains('BaseLogin.php', $filenames,
+            'Method-injected BaseLogin must be traced when entryMethods is provided'
+        );
+    }
+
+    /** @test */
     public function test_traces_two_hops_controller_service_repository(): void
     {
         $ns      = 'CgTracerTest' . uniqid();

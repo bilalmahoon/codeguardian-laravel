@@ -67,6 +67,18 @@ class DependencyTracer
     }
 
     /**
+     * Entry-point methods to inspect for method-injected dependencies, keyed by
+     * fully-qualified class name: [ 'App\..\APIAuthController' => 'authenticateUser' ].
+     *
+     * Many Laravel codebases inject dependencies as CONTROLLER METHOD parameters
+     * rather than constructor parameters (action/feature pattern), e.g.:
+     *     public function authenticateUser(UserLoginRequest $r, BaseLogin $login)
+     * Constructor-only tracing misses the real business-logic class (BaseLogin),
+     * so we also walk the resolved route method's parameters.
+     */
+    private array $entryMethods = [];
+
+    /**
      * Trace the full dependency chain for the given FQCNs.
      *
      * @param  string[]    $classes      Fully-qualified class names to start from (controllers)
@@ -75,13 +87,20 @@ class DependencyTracer
      *                                   this prefix (e.g. "Modules/UserAuthentication").
      *                                   Files outside the module boundary are skipped entirely —
      *                                   they are not in scope for a module-scoped refactoring.
+     * @param  array       $entryMethods Map of class => method to inspect for method-injected
+     *                                   dependencies (the resolved route handler method).
      * @return array<string, string>  [ 'relative/path.php' => 'file contents' ]
      */
-    public function trace(array $classes, int $maxDepth = 2, ?string $moduleRoot = null): array
-    {
-        $this->visited    = [];
-        $this->moduleRoot = $moduleRoot ? ltrim($moduleRoot, '/') : null;
-        $files            = [];
+    public function trace(
+        array   $classes,
+        int     $maxDepth = 2,
+        ?string $moduleRoot = null,
+        array   $entryMethods = []
+    ): array {
+        $this->visited      = [];
+        $this->moduleRoot   = $moduleRoot ? ltrim($moduleRoot, '/') : null;
+        $this->entryMethods = $entryMethods;
+        $files              = [];
 
         foreach ($classes as $class) {
             $this->traceClass($class, $files, 0, $maxDepth);
@@ -159,12 +178,30 @@ class DependencyTracer
             return;
         }
 
+        // 1) Constructor-injected dependencies (classic service pattern)
         $constructor = $ref->getConstructor();
-        if (! $constructor) {
-            return;
+        if ($constructor) {
+            $this->traceParameters($constructor, $files, $depth, $maxDepth);
         }
 
-        foreach ($constructor->getParameters() as $param) {
+        // 2) Method-injected dependencies on the resolved route handler method
+        //    (action / feature pattern). Only applies to the entry class.
+        $entryMethod = $this->entryMethods[$class] ?? ($this->entryMethods[$concrete] ?? null);
+        if ($entryMethod !== null && $ref->hasMethod($entryMethod)) {
+            $this->traceParameters($ref->getMethod($entryMethod), $files, $depth, $maxDepth);
+        }
+    }
+
+    /**
+     * Trace every class-typed parameter of a constructor or method.
+     */
+    private function traceParameters(
+        \ReflectionFunctionAbstract $fn,
+        array &$files,
+        int $depth,
+        int $maxDepth
+    ): void {
+        foreach ($fn->getParameters() as $param) {
             $type = $param->getType();
 
             // Skip built-in types (string, int, array, …) and union / intersection types
