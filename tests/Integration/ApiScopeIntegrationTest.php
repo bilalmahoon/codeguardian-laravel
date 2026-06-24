@@ -234,6 +234,64 @@ class ApiScopeIntegrationTest extends TestCase
         );
     }
 
+    // ─── Single-file scope (--file=) ─────────────────────────────────────────
+
+    /** @test */
+    public function test_build_context_for_file_includes_target_and_dependency_chain(): void
+    {
+        $scanner = new CodeScanner();
+        $context = $scanner->buildContextForFile(
+            realpath(__DIR__ . '/Fixtures'),
+            'Controllers/ApiAuthController.php'
+        );
+
+        $this->assertSame('file', $context['scope']);
+        $this->assertSame('Controllers/ApiAuthController.php', $context['target_file']);
+
+        $filenames = array_map('basename', array_keys($context['files']));
+
+        // Target file present
+        $this->assertContains('ApiAuthController.php', $filenames);
+
+        // Dependency chain traced via Reflection
+        $this->assertContains('AuthService.php',    $filenames);
+        $this->assertContains('TokenService.php',   $filenames);
+        $this->assertContains('UserRepository.php', $filenames);
+
+        // Unrelated file excluded
+        $this->assertNotContains('RegisterController.php', $filenames);
+    }
+
+    /** @test */
+    public function test_build_context_for_file_marks_target_reason(): void
+    {
+        $scanner = new CodeScanner();
+        $context = $scanner->buildContextForFile(
+            realpath(__DIR__ . '/Fixtures'),
+            'Services/TokenService.php'
+        );
+
+        // The explicitly-provided file must be flagged as the target
+        $this->assertSame('target file (explicitly provided)',
+            $context['file_reasons']['Services/TokenService.php']
+        );
+
+        // TokenService has no dependencies → scope is exactly 1 file
+        $this->assertCount(1, $context['files']);
+    }
+
+    /** @test */
+    public function test_build_context_for_file_throws_on_missing_file(): void
+    {
+        $scanner = new CodeScanner();
+
+        $this->expectException(\InvalidArgumentException::class);
+        $scanner->buildContextForFile(
+            realpath(__DIR__ . '/Fixtures'),
+            'Controllers/DoesNotExist.php'
+        );
+    }
+
     // ─── Module-boundary enforcement ─────────────────────────────────────────
 
     /** @test */

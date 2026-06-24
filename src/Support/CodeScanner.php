@@ -281,23 +281,79 @@ class CodeScanner
      */
     public function buildContextForFile(string $projectRoot, string $relFilePath): array
     {
-        $fullPath = $projectRoot . '/' . ltrim($relFilePath, '/');
+        $relFilePath = ltrim($relFilePath, '/');
+        $fullPath    = $projectRoot . '/' . $relFilePath;
 
         if (! file_exists($fullPath)) {
             throw new \InvalidArgumentException("File not found: {$fullPath}");
         }
 
-        $files   = [$relFilePath => file_get_contents($fullPath)];
+        $content = file_get_contents($fullPath);
+        $files   = [$relFilePath => $content];
+
+        // ── Trace the file's dependency chain (same as the API flow) ─────────
+        // If the file declares a resolvable class, walk its constructor chain via
+        // Reflection so the AI receives the full call chain as read-only context.
+        // The module boundary is auto-detected so we never pull in other modules.
+        $moduleRoot = null;
+        $fqcn       = $this->extractFqcn($content);
+
+        if ($fqcn !== null && class_exists($fqcn)) {
+            try {
+                $tracer     = new DependencyTracer($projectRoot);
+                $moduleRoot = $tracer->detectModuleRoot($fullPath);
+                $traced     = $tracer->trace([$fqcn], maxDepth: 2, moduleRoot: $moduleRoot);
+                // Keep the target file first; merge traced dependencies after it
+                $files = array_merge($files, $traced);
+            } catch (\Throwable) {
+                // Reflection not available — fall back to use-statement scanning
+                $files = array_merge($files, $this->findRelatedServices($projectRoot, $files));
+            }
+        } else {
+            // Class can't be reflected (no app bootstrap, trait, helper, etc.)
+            $files = array_merge($files, $this->findRelatedServices($projectRoot, $files));
+        }
+
         $summary = $this->buildSummary($files, 'laravel');
 
+        $fileReasons = [$relFilePath => 'target file (explicitly provided)'];
+        foreach (array_keys($files) as $relPath) {
+            if (! isset($fileReasons[$relPath])) {
+                $fileReasons[$relPath] = 'constructor dependency (traced via Reflection)';
+            }
+        }
+
         return [
-            'project_type' => 'laravel',
-            'project_name' => basename($projectRoot),
-            'scan_path'    => $projectRoot,
-            'files'        => $files,
-            'summary'      => $summary,
-            'scope'        => 'file',
+            'project_type'      => 'laravel',
+            'project_name'      => basename($projectRoot) . " [{$relFilePath}]",
+            'scan_path'         => $projectRoot,
+            'target_file'       => $relFilePath,
+            'files'             => $files,
+            'summary'           => $summary,
+            'scope'             => 'file',
+            'resolution_method' => 'file+reflection',
+            'module_root'       => $moduleRoot,
+            'file_reasons'      => $fileReasons,
         ];
+    }
+
+    /**
+     * Extract the fully-qualified class name declared in a PHP source string.
+     * Returns null if no namespaced class/interface/trait/enum is found.
+     */
+    private function extractFqcn(string $content): ?string
+    {
+        $namespace = '';
+        if (preg_match('/^\s*namespace\s+([^;]+);/m', $content, $nsMatch)) {
+            $namespace = trim($nsMatch[1]);
+        }
+
+        if (preg_match('/^\s*(?:final\s+|abstract\s+)*(?:class|interface|trait|enum)\s+(\w+)/m', $content, $clsMatch)) {
+            $class = $clsMatch[1];
+            return $namespace !== '' ? $namespace . '\\' . $class : $class;
+        }
+
+        return null;
     }
 
     // ─── Private helpers ─────────────────────────────────────────────────────

@@ -84,6 +84,7 @@ class RefactorCommand extends Command
                             {--path=              : Project root directory (default: base_path())}
                             {--module=            : Refactor a specific module only (e.g. User, Order)}
                             {--api=               : Refactor APIs matching this filter (e.g. GET:/api/users)}
+                            {--file=              : Refactor a single file + its dependency chain (e.g. app/Services/AuthService.php)}
                             {--type=              : Project type: laravel or flutter}
                             {--mode=              : Execution mode: interactive (default) or auto}
                             {--no-backup            : Skip creating backups before modifying files}
@@ -152,9 +153,11 @@ class RefactorCommand extends Command
 
         // Show resolution method so we can see if Router or regex fallback was used
         if (isset($context['resolution_method'])) {
-            $method = $context['resolution_method'] === 'router+reflection'
-                ? '✔ Laravel Router + PHP Reflection (exact)'
-                : '⚠ Regex fallback (Laravel Router unavailable)';
+            $method = match ($context['resolution_method']) {
+                'router+reflection' => '✔ Laravel Router + PHP Reflection (exact)',
+                'file+reflection'   => '✔ Target file + PHP Reflection dependency chain',
+                default             => '⚠ Regex fallback (Laravel Router unavailable)',
+            };
             $this->info("  Resolver: {$method}");
         }
 
@@ -301,6 +304,11 @@ class RefactorCommand extends Command
     {
         $moduleOpt = $this->option('module');
         $apiOpt    = $this->option('api');
+        $fileOpt   = $this->option('file');
+
+        if ($fileOpt) {
+            return ['type' => 'file', 'value' => $fileOpt, 'label' => "File: {$fileOpt}"];
+        }
 
         if ($moduleOpt) {
             return ['type' => 'module', 'value' => $moduleOpt, 'label' => "Module: {$moduleOpt}"];
@@ -329,6 +337,8 @@ class RefactorCommand extends Command
                 $choices[] = 'Specific API / route filter';
             }
 
+            $choices[] = 'Specific file';
+
             $choice = $this->choice('What scope do you want to refactor?', $choices, 0);
 
             if (str_starts_with($choice, 'Module:')) {
@@ -341,6 +351,12 @@ class RefactorCommand extends Command
                 $filter = $this->ask('Enter route filter');
                 return ['type' => 'api', 'value' => $filter, 'label' => "API filter: {$filter}"];
             }
+
+            if ($choice === 'Specific file') {
+                $this->info('  Example: app/Services/AuthService.php or Modules/User/Http/Controllers/UserController.php');
+                $file = $this->ask('Enter file path (relative to project root)');
+                return ['type' => 'file', 'value' => $file, 'label' => "File: {$file}"];
+            }
         }
 
         return ['type' => 'full', 'value' => null, 'label' => 'Full project'];
@@ -351,6 +367,7 @@ class RefactorCommand extends Command
         return match ($scope['type']) {
             'module' => $scanner->buildContextForModule($this->projectRoot, $scope['value']),
             'api'    => $scanner->buildContextForApi($this->projectRoot, $scope['value']),
+            'file'   => $scanner->buildContextForFile($this->projectRoot, $scope['value']),
             default  => $scanner->buildContext($this->projectRoot, $this->projectType),
         };
     }
@@ -467,10 +484,12 @@ class RefactorCommand extends Command
     {
         $findingsByFile = $this->groupFindingsByFile($analysisResults['agent_results']);
 
-        // When --api= is used and AI is enabled, we MUST NOT bail early even if static
-        // analysis found nothing. The deep-chain pass will run AI on the service/repository
-        // layer regardless. Without --api=, an empty findings list means nothing to do.
-        $hasApiScope = $this->aiEnabled && $this->option('api') && ! empty($context['files']);
+        // When --api= or --file= is used and AI is enabled, we MUST NOT bail early even if
+        // static analysis found nothing. The deep-chain pass will run AI on the traced
+        // dependency layer regardless. Without a scoped target, an empty findings list
+        // means there is nothing to do.
+        $isScopedTarget = $this->option('api') || $this->option('file');
+        $hasApiScope    = $this->aiEnabled && $isScopedTarget && ! empty($context['files']);
 
         if (empty($findingsByFile) && ! $hasApiScope) {
             $this->warn('  No file-specific findings to refactor.');
