@@ -227,6 +227,56 @@ class DependencyTracerTest extends TestCase
     }
 
     /** @test */
+    public function test_entry_controller_use_imports_are_not_scanned(): void
+    {
+        // Regression: a controller's `use` block imports EVERY sibling feature it
+        // can dispatch (login, logout, register, …). For the ENTRY controller we
+        // must only follow the resolved route method's parameters — NOT scan the
+        // whole `use` block — otherwise the entire module gets dragged into scope.
+        $ns          = 'CgTracerTest' . uniqid();
+        $loginFqn    = $ns . '\\LoginFeature';
+        $logoutFqn   = $ns . '\\LogoutFeature';
+        $registerFqn = $ns . '\\RegisterFeature';
+        $ctrlFqn     = $ns . '\\ApiAuthController';
+
+        file_put_contents($this->tmpDir . '/LoginFeature.php', "<?php\nnamespace {$ns};\nclass LoginFeature {}");
+        file_put_contents($this->tmpDir . '/LogoutFeature.php', "<?php\nnamespace {$ns};\nclass LogoutFeature {}");
+        file_put_contents($this->tmpDir . '/RegisterFeature.php', "<?php\nnamespace {$ns};\nclass RegisterFeature {}");
+        file_put_contents($this->tmpDir . '/ApiAuthController.php', <<<PHP
+            <?php
+            namespace {$ns};
+            use {$ns}\\LoginFeature;
+            use {$ns}\\LogoutFeature;
+            use {$ns}\\RegisterFeature;
+            class ApiAuthController {
+                public function authenticateUser(LoginFeature \$login) { return \$login; }
+                public function logout(LogoutFeature \$logout) { return \$logout; }
+                public function register(RegisterFeature \$register) { return \$register; }
+            }
+            PHP);
+
+        require_once $this->tmpDir . '/LoginFeature.php';
+        require_once $this->tmpDir . '/LogoutFeature.php';
+        require_once $this->tmpDir . '/RegisterFeature.php';
+        require_once $this->tmpDir . '/ApiAuthController.php';
+
+        $tracer = new DependencyTracer($this->tmpDir);
+        $files  = $tracer->trace([$ctrlFqn], 2, null, [$ctrlFqn => 'authenticateUser']);
+        $names  = array_map('basename', array_keys($files));
+
+        $this->assertContains('ApiAuthController.php', $names);
+        $this->assertContains('LoginFeature.php', $names,
+            'The route method parameter (LoginFeature) must be traced'
+        );
+        $this->assertNotContains('LogoutFeature.php', $names,
+            'Sibling features imported via use must NOT be pulled into scope from the entry controller'
+        );
+        $this->assertNotContains('RegisterFeature.php', $names,
+            'Sibling features imported via use must NOT be pulled into scope from the entry controller'
+        );
+    }
+
+    /** @test */
     public function test_traces_two_hops_controller_service_repository(): void
     {
         $ns      = 'CgTracerTest' . uniqid();

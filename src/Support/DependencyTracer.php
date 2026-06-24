@@ -130,13 +130,16 @@ class DependencyTracer
 
     // ─── Private ─────────────────────────────────────────────────────────────
 
+    /**
+     * Entry point for tracing a dependency referenced by NAME (a constructor /
+     * method parameter type, or a `use` import). Resolves interfaces/abstracts
+     * to their concrete implementation, then hands off to processRef().
+     */
     private function traceClass(string $class, array &$files, int $depth, int $maxDepth): void
     {
-        if ($depth > $maxDepth || isset($this->visited[$class])) {
+        if ($depth > $maxDepth) {
             return;
         }
-
-        $this->visited[$class] = true;
 
         // Skip vendor / framework classes immediately
         if ($this->isVendorClass($class)) {
@@ -146,17 +149,50 @@ class DependencyTracer
         // If it is an interface or abstract class, resolve to the concrete
         // implementation registered in Laravel's IoC container.
         $concrete = $this->resolveConcrete($class);
+        $target   = (class_exists($concrete)) ? $concrete : $class;
 
-        if (! class_exists($concrete)) {
+        if (! class_exists($target) && ! interface_exists($target) && ! trait_exists($target)) {
             return;
         }
 
         try {
-            $ref  = new \ReflectionClass($concrete);
-            $file = $ref->getFileName();
+            $ref = new \ReflectionClass($target);
         } catch (\ReflectionException) {
             return;
         }
+
+        $this->processRef($ref, $files, $depth, $maxDepth);
+    }
+
+    /**
+     * Process an actual reflected class/interface/trait: include its file, walk
+     * its hierarchy (parent/interfaces/traits) at the SAME depth, then follow
+     * its dependencies one level deeper.
+     *
+     * Keying `visited` by the REFLECTED class name (not the requested name) is
+     * what lets us include BOTH a thin concrete `Login` AND its parent
+     * `BaseLogin` — even though the container resolved the abstract BaseLogin to
+     * Login. Marking the requested abstract name as visited (the old behaviour)
+     * caused the real parent file to be skipped.
+     */
+    private function processRef(
+        \ReflectionClass $ref,
+        array &$files,
+        int $depth,
+        int $maxDepth
+    ): void {
+        $name = $ref->getName();
+
+        if (isset($this->visited[$name]) || $depth > $maxDepth) {
+            return;
+        }
+        $this->visited[$name] = true;
+
+        if ($this->isVendorClass($name)) {
+            return;
+        }
+
+        $file = $ref->getFileName();
 
         // A file outside the project root is a vendor/framework class — never
         // include it and never recurse into its hierarchy or dependencies.
@@ -167,9 +203,7 @@ class DependencyTracer
         $relPath = ltrim(str_replace($this->projectRoot, '', $file), '/');
 
         // Module-boundary enforcement: when $moduleRoot is set, only include
-        // files that live within that module. Dependencies from other modules
-        // or from the global app/ layer are skipped — they must not be modified
-        // during a single-module refactoring operation.
+        // files that live within that module.
         if ($this->moduleRoot !== null && ! str_starts_with($relPath, $this->moduleRoot . '/')) {
             return;
         }
@@ -178,60 +212,53 @@ class DependencyTracer
         $files[$relPath] = $source;
 
         // ── Class hierarchy (SAME depth) ─────────────────────────────────────
-        // The parent class / traits / interfaces are PART of this class's
-        // definition, not a separate dependency hop. This is critical for the
-        // common pattern where the container resolves an abstract `BaseLogin`
-        // to a thin concrete `Login extends BaseLogin` — the real logic lives in
-        // the parent, so it MUST be pulled in even at the depth cap.
-        $this->traceHierarchy($ref, $files, $depth, $maxDepth);
+        // Parent class / interfaces / traits are PART of this class's definition.
+        // Processed directly via their own ReflectionClass so an abstract parent
+        // (e.g. BaseLogin behind a concrete Login) is always pulled in.
+        if ($parent = $ref->getParentClass()) {
+            $this->processRef($parent, $files, $depth, $maxDepth);
+        }
+        foreach ($ref->getInterfaces() as $interface) {
+            $this->processRef($interface, $files, $depth, $maxDepth);
+        }
+        foreach ($ref->getTraits() as $trait) {
+            $this->processRef($trait, $files, $depth, $maxDepth);
+        }
 
         // Stop recursing into dependencies once we hit the depth cap
         if ($depth >= $maxDepth) {
             return;
         }
 
+        // Is this one of the entry controllers (we have its exact route method)?
+        $isEntryClass = isset($this->entryMethods[$name]);
+
         // 1) Constructor-injected dependencies (classic service pattern)
-        $constructor = $ref->getConstructor();
-        if ($constructor) {
+        if ($constructor = $ref->getConstructor()) {
             $this->traceParameters($constructor, $files, $depth, $maxDepth);
         }
 
         // 2) Method-injected dependencies on the resolved route handler method
-        //    (action / feature pattern). Only applies to the entry class.
-        $entryMethod = $this->entryMethods[$class] ?? ($this->entryMethods[$concrete] ?? null);
-        if ($entryMethod !== null && $ref->hasMethod($entryMethod)) {
-            $this->traceParameters($ref->getMethod($entryMethod), $files, $depth, $maxDepth);
+        //    (action / feature pattern). Only the entry controller has this.
+        if ($isEntryClass) {
+            $entryMethod = $this->entryMethods[$name];
+            if ($ref->hasMethod($entryMethod)) {
+                $this->traceParameters($ref->getMethod($entryMethod), $files, $depth, $maxDepth);
+            }
         }
 
         // 3) Source-level dependencies used INSIDE method bodies (repositories,
         //    services, models, query builders) that are not type-hinted params.
-        //    Reflection cannot see these, so scan the `use` imports of the file.
-        if ($source !== '') {
+        //    Reflection cannot see these, so scan the file's `use` imports.
+        //
+        //    IMPORTANT: skip this for the entry controller. A controller's `use`
+        //    block typically imports EVERY sibling feature it can dispatch (login,
+        //    logout, register, …). Scanning them would drag the whole module into
+        //    scope. For the entry controller we rely solely on the precise route
+        //    method parameters (step 2). Downstream classes (features, services)
+        //    DO get their use-imports scanned so repositories/queries are found.
+        if ($source !== '' && ! $isEntryClass) {
             $this->traceUseImports($source, $files, $depth, $maxDepth);
-        }
-    }
-
-    /**
-     * Trace parent class, implemented interfaces, and used traits at the SAME
-     * depth — they are part of the class definition, not a dependency hop.
-     */
-    private function traceHierarchy(
-        \ReflectionClass $ref,
-        array &$files,
-        int $depth,
-        int $maxDepth
-    ): void {
-        $parent = $ref->getParentClass();
-        if ($parent) {
-            $this->traceClass($parent->getName(), $files, $depth, $maxDepth);
-        }
-
-        foreach ($ref->getInterfaceNames() as $interface) {
-            $this->traceClass($interface, $files, $depth, $maxDepth);
-        }
-
-        foreach ($ref->getTraitNames() as $trait) {
-            $this->traceClass($trait, $files, $depth, $maxDepth);
         }
     }
 

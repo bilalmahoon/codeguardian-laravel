@@ -1052,51 +1052,24 @@ class RefactorCommand extends Command
                 return [];
             }
 
-            // Show what Claude did
-            $this->newLine();
-            $this->info('  🤖 AI REFACTORING CHANGES:');
-            foreach ($aiChanges as $change) {
-                $type = $change['type'] ?? 'change';
-                $desc = $change['description'] ?? '';
-                $this->line("  ✔  [{$type}] {$desc}");
-            }
-
-            // Show tests Claude recommends
-            if (! empty($result['tests_needed'])) {
-                $this->newLine();
-                $this->line('  📋 Recommended tests to write:');
-                foreach ($result['tests_needed'] as $test) {
-                    $this->line("     • {$test}");
-                }
-            }
-
-            // Show a brief diff of AI changes (first 40 lines)
-            $diffLines = $this->quickDiff($currentContent, $aiContent, 40);
-            if (! empty($diffLines)) {
-                $this->newLine();
-                $this->line('  DIFF (AI changes):');
-                foreach ($diffLines as $line) {
-                    if (str_starts_with($line, '+')) {
-                        $this->info('  ' . $line);
-                    } elseif (str_starts_with($line, '-')) {
-                        $this->warn('  ' . $line);
-                    }
-                }
-            }
-
-            // User confirmed "Proceed with refactoring?" at Step 3.
-            // No second confirmation here — AI changes are applied automatically.
-
             // Final gate — AI must never write to global infrastructure files
             if ($this->isForbiddenWrite($filePath)) {
                 $this->warn("  ⛔ AI write blocked (protected infrastructure file): {$filePath}");
                 return [];
             }
 
-            // Write AI-refactored content
+            // ─────────────────────────────────────────────────────────────────
+            // WRITE FIRST, DISPLAY SECOND.
+            // The refactored code is the product; the on-screen summary is
+            // cosmetic. Persisting before any rendering guarantees a display
+            // bug (e.g. a malformed tests_needed entry) can NEVER discard a
+            // valid refactor. This was a real bug: an "Array to string
+            // conversion" while printing tests silently threw away every AI
+            // rewrite because File::put ran after the print.
+            // ─────────────────────────────────────────────────────────────────
             File::put($fullPath, $aiContent);
 
-            // Write any new files Claude generated (Services, etc.)
+            // Write any new files Claude generated (Services, FormRequests, etc.)
             foreach (($result['generated_files'] ?? []) as $genPath => $genContent) {
                 if (! is_string($genPath) || ! is_string($genContent) || empty($genContent)) {
                     continue;
@@ -1114,14 +1087,87 @@ class RefactorCommand extends Command
                 }
             }
 
+            // ── Display (best-effort; never allowed to abort the saved work) ──
+            try {
+                $this->newLine();
+                $this->info('  🤖 AI REFACTORING CHANGES:');
+                foreach ($aiChanges as $change) {
+                    $type = is_array($change) ? ($change['type'] ?? 'change') : 'change';
+                    $desc = is_array($change)
+                        ? ($change['description'] ?? '')
+                        : (is_string($change) ? $change : json_encode($change));
+                    $this->line("  ✔  [{$type}] {$desc}");
+                }
+
+                if (! empty($result['tests_needed'])) {
+                    $this->newLine();
+                    $this->line('  📋 Recommended tests to write:');
+                    foreach ($result['tests_needed'] as $test) {
+                        $this->line('     • ' . $this->stringifyTest($test));
+                    }
+                }
+
+                $diffLines = $this->quickDiff($currentContent, $aiContent, 40);
+                if (! empty($diffLines)) {
+                    $this->newLine();
+                    $this->line('  DIFF (AI changes):');
+                    foreach ($diffLines as $line) {
+                        if (str_starts_with($line, '+')) {
+                            $this->info('  ' . $line);
+                        } elseif (str_starts_with($line, '-')) {
+                            $this->warn('  ' . $line);
+                        }
+                    }
+                }
+            } catch (\Throwable $displayError) {
+                // Display problems must not undo the already-saved refactor.
+                $this->line('  (summary display skipped: ' . $displayError->getMessage() . ')');
+            }
+
             $this->info("  ✔  AI refactoring saved (" . count($aiChanges) . " structural change(s))");
 
-            return array_map(fn($c) => '[AI] ' . ($c['type'] ?? '') . ': ' . ($c['description'] ?? ''), $aiChanges);
+            return array_map(
+                fn($c) => is_array($c)
+                    ? '[AI] ' . ($c['type'] ?? '') . ': ' . ($c['description'] ?? '')
+                    : '[AI] ' . (is_string($c) ? $c : json_encode($c)),
+                $aiChanges
+            );
 
         } catch (\Throwable $e) {
             $this->warn("  ⚠  AI refactoring failed: {$e->getMessage()}");
             return [];
         }
+    }
+
+    /**
+     * Render a single "tests_needed" entry as a readable line.
+     * Handles both the structured object form ({scenario, type, priority,
+     * description}) and the legacy plain-string form.
+     */
+    private function stringifyTest(mixed $test): string
+    {
+        if (is_string($test)) {
+            return $test;
+        }
+
+        if (is_array($test)) {
+            $scenario = $test['scenario'] ?? $test['name'] ?? null;
+            $desc     = $test['description'] ?? null;
+
+            if ($scenario && $desc) {
+                return "{$scenario} — {$desc}";
+            }
+            if ($scenario) {
+                return (string) $scenario;
+            }
+            if ($desc) {
+                return (string) $desc;
+            }
+
+            return json_encode($test);
+        }
+
+        return (string) $test;
     }
 
     /** Simple line-by-line diff, returns first $maxLines changed lines */
