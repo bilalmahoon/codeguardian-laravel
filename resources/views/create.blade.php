@@ -4,7 +4,7 @@
 
 @section('content')
     <h1>New run</h1>
-    <p class="muted">Pick an operation and a target. The run starts in the background and streams live progress.</p>
+    <p class="muted">Pick an operation and choose a target from the list. The run starts in the background and streams live progress.</p>
 
     @unless($aiReady['enabled'])
         <div class="banner warn">
@@ -18,7 +18,7 @@
 
         <div class="field">
             <label class="lbl" for="operation">Operation</label>
-            <select name="operation" id="operation" onchange="cgSync()">
+            <select name="operation" id="operation" onchange="cgSyncOperation()">
                 @foreach($operations as $key => $spec)
                     <option value="{{ $key }}">{{ $spec['label'] }}</option>
                 @endforeach
@@ -26,32 +26,42 @@
             <div class="hint" id="op-hint"></div>
         </div>
 
-        <div class="field" data-opt="api">
-            <label class="lbl" for="api">API route filter</label>
-            <input type="text" name="api" id="api" placeholder="v1/auth/login">
-            <div class="hint">Refactors/analyzes the exact route handler and its dependency chain (controller → service → repository).</div>
+        <div class="row">
+            <div class="field">
+                <label class="lbl" for="target_type">Target</label>
+                <select name="target_type" id="target_type" onchange="cgSyncTarget()"></select>
+            </div>
+            <div class="field" id="target-value-wrap">
+                <label class="lbl" for="target_value">Choose / search</label>
+                <input type="text" name="target_value" id="target_value" list="" autocomplete="off" placeholder="">
+                <div class="hint" id="target-hint"></div>
+            </div>
         </div>
 
-        <div class="field" data-opt="module">
-            <label class="lbl" for="module">Module</label>
-            <input type="text" name="module" id="module" placeholder="UserAuthentication">
-            <div class="hint">Limit to a single module (nWidart-style Modules/, app/Modules/, app/Domain/).</div>
-        </div>
-
-        <div class="field" data-opt="file">
-            <label class="lbl" for="file">Single file</label>
-            <input type="text" name="file" id="file" placeholder="app/Services/AuthService.php">
-            <div class="hint">Target one file plus its traced dependency chain.</div>
-        </div>
-
-        <div class="field" data-opt="path">
-            <label class="lbl" for="path">Path</label>
-            <input type="text" name="path" id="path" placeholder="(leave empty for whole project)">
-            <div class="hint">Directory to scan. Leave empty to scan the whole project.</div>
-        </div>
+        {{-- Searchable option lists (native datalist — type to filter) --}}
+        <datalist id="dl-module">
+            @foreach($modules as $m)
+                <option value="{{ $m }}"></option>
+            @endforeach
+        </datalist>
+        <datalist id="dl-api">
+            @foreach($apiRoutes as $r)
+                <option value="{{ $r['uri'] }}">{{ $r['methods'] }} /{{ $r['uri'] }} — {{ $r['action'] }}{{ $r['name'] ? ' ('.$r['name'].')' : '' }}</option>
+            @endforeach
+        </datalist>
+        <datalist id="dl-web">
+            @foreach($webRoutes as $r)
+                <option value="{{ $r['uri'] }}">{{ $r['methods'] }} /{{ $r['uri'] }} — {{ $r['action'] }}{{ $r['name'] ? ' ('.$r['name'].')' : '' }}</option>
+            @endforeach
+        </datalist>
+        <datalist id="dl-command">
+            @foreach($commands as $c)
+                <option value="{{ $c['name'] }}">{{ $c['file'] }}</option>
+            @endforeach
+        </datalist>
 
         <div class="row">
-            <div class="field" data-opt="mode">
+            <div class="field">
                 <label class="lbl" for="mode">Engine mode</label>
                 <select name="mode" id="mode">
                     <option value="">Auto (use config)</option>
@@ -60,7 +70,7 @@
                     <option value="ai">AI only</option>
                 </select>
             </div>
-            <div class="field" data-opt="format">
+            <div class="field" data-op="analyze">
                 <label class="lbl" for="format">Report format</label>
                 <select name="format" id="format">
                     <option value="both">HTML + JSON</option>
@@ -70,7 +80,7 @@
             </div>
         </div>
 
-        <div class="field" data-opt="with-existing-tests">
+        <div class="field" data-op="refactor">
             <label class="check">
                 <input type="checkbox" name="with-existing-tests" value="1">
                 Also run the project's existing tests (tests/Feature, tests/Unit) to catch breaking changes
@@ -85,29 +95,84 @@
     </form>
 
     <script>
-        // Which target fields each operation accepts (mirrors controller whitelist).
-        const CG_OPTS = {
-            'analyze':        ['api','module','path','mode','format'],
-            'refactor':       ['api','module','file','path','mode','with-existing-tests'],
-            'security':       ['path','mode'],
-            'performance':    ['path','mode'],
-            'generate-tests': ['file','path','mode'],
+        const CG_OPERATIONS = @json($operations);
+        const CG_TARGET_LABELS = @json($targetLabels);
+        const CG_COUNTS = {
+            module:  {{ count($modules) }},
+            api:     {{ count($apiRoutes) }},
+            web:     {{ count($webRoutes) }},
+            command: {{ count($commands) }},
         };
         const CG_HINTS = {
             'analyze': 'Read-only review. Produces a graded report (architecture, security, performance, tech debt).',
-            'refactor': 'Test-first foolproof refactor of the route/module/file and its dependency chain.',
+            'refactor': 'Test-first foolproof refactor of the chosen target and its dependency chain.',
             'security': 'Senior-DevOps security audit: SQL injection, XSS, IDOR, broken auth, secrets.',
             'performance': 'Performance review: N+1 queries, missing indexes, caching, memory.',
             'generate-tests': 'Generate QA test cases (with assertions/mocks/edge cases) for the target.',
         };
-        function cgSync() {
+        // Each target type → { datalist id | null, placeholder, freeText }
+        const CG_TARGET_META = {
+            project: { list: null,         ph: '(whole project — no target needed)', free: false, none: true },
+            module:  { list: 'dl-module',  ph: 'Select a module…',                   free: false },
+            api:     { list: 'dl-api',     ph: 'Search API routes by URI…',          free: false },
+            web:     { list: 'dl-web',     ph: 'Search web routes by URI…',          free: false },
+            command: { list: 'dl-command', ph: 'Search artisan commands by name…',   free: false },
+            file:    { list: null,         ph: 'app/Services/AuthService.php',        free: true },
+            path:    { list: null,         ph: 'app/Http/Controllers (directory)',   free: true },
+        };
+
+        function cgSyncOperation() {
             const op = document.getElementById('operation').value;
-            const allowed = CG_OPTS[op] || [];
-            document.querySelectorAll('[data-opt]').forEach(el => {
-                el.style.display = allowed.includes(el.getAttribute('data-opt')) ? '' : 'none';
+            const spec = CG_OPERATIONS[op] || { targets: ['project'], options: [] };
+
+            // Rebuild the target-type dropdown for this operation.
+            const sel = document.getElementById('target_type');
+            sel.innerHTML = '';
+            (spec.targets || ['project']).forEach(function (t) {
+                const opt = document.createElement('option');
+                opt.value = t;
+                let label = CG_TARGET_LABELS[t] || t;
+                if (CG_COUNTS[t] !== undefined) label += ' (' + CG_COUNTS[t] + ')';
+                opt.textContent = label;
+                sel.appendChild(opt);
             });
+
+            // Toggle operation-specific options (format/with-existing-tests).
+            document.querySelectorAll('[data-op]').forEach(function (el) {
+                el.style.display = el.getAttribute('data-op') === op ? '' : 'none';
+            });
+
             document.getElementById('op-hint').textContent = CG_HINTS[op] || '';
+            cgSyncTarget();
         }
-        cgSync();
+
+        function cgSyncTarget() {
+            const type = document.getElementById('target_type').value;
+            const meta = CG_TARGET_META[type] || { list: null, ph: '', free: true };
+            const input = document.getElementById('target_value');
+            const wrap = document.getElementById('target-value-wrap');
+            const hint = document.getElementById('target-hint');
+
+            if (meta.none) {
+                wrap.style.display = 'none';
+                input.value = '';
+                hint.textContent = '';
+                return;
+            }
+            wrap.style.display = '';
+            input.placeholder = meta.ph || '';
+            if (meta.list && document.getElementById(meta.list)) {
+                input.setAttribute('list', meta.list);
+                const n = CG_COUNTS[type];
+                hint.textContent = (n === 0)
+                    ? 'None found in this project — you can still type a value.'
+                    : 'Type to filter the list, or paste a value.';
+            } else {
+                input.removeAttribute('list');
+                hint.textContent = meta.free ? 'Type a path relative to the project root.' : '';
+            }
+        }
+
+        cgSyncOperation();
     </script>
 @endsection

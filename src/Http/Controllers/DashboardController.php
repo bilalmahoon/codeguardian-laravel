@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CodeGuardian\Laravel\Http\Controllers;
 
+use CodeGuardian\Laravel\Support\ProjectMetadata;
 use CodeGuardian\Laravel\Support\RunStore;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -17,37 +18,60 @@ use Illuminate\Http\Response;
 class DashboardController
 {
     /**
-     * Supported operations mapped to their artisan command and the options
-     * each one accepts. Anything not listed here is rejected.
+     * Supported operations mapped to their artisan command, the scalar options
+     * each accepts (mode/format/…), and the TARGET TYPES the user may pick from
+     * a dropdown. Anything not listed here is rejected.
      *
-     * @var array<string,array{artisan:string,label:string,options:array<int,string>}>
+     * @var array<string,array{artisan:string,label:string,options:array<int,string>,targets:array<int,string>}>
      */
     private const OPERATIONS = [
         'analyze' => [
             'artisan' => 'codeguardian:analyze',
             'label'   => 'Analyze',
-            'options' => ['path', 'module', 'api', 'type', 'mode', 'format'],
+            'options' => ['mode', 'format'],
+            'targets' => ['project', 'module', 'api', 'web'],
         ],
         'refactor' => [
             'artisan' => 'codeguardian:refactor',
             'label'   => 'Refactor',
-            'options' => ['path', 'module', 'api', 'file', 'type', 'mode', 'with-existing-tests'],
+            'options' => ['mode', 'with-existing-tests'],
+            'targets' => ['project', 'module', 'api', 'web', 'file', 'command'],
         ],
         'security' => [
             'artisan' => 'codeguardian:security',
             'label'   => 'Security audit',
-            'options' => ['path', 'type', 'mode'],
+            'options' => ['mode'],
+            'targets' => ['project', 'path'],
         ],
         'performance' => [
             'artisan' => 'codeguardian:performance',
             'label'   => 'Performance review',
-            'options' => ['path', 'type', 'mode'],
+            'options' => ['mode'],
+            'targets' => ['project', 'path'],
         ],
         'generate-tests' => [
             'artisan' => 'codeguardian:test',
             'label'   => 'Generate tests',
-            'options' => ['path', 'file', 'type', 'mode'],
+            'options' => ['mode'],
+            'targets' => ['project', 'file', 'command', 'path'],
         ],
+    ];
+
+    /**
+     * How each target type maps to a CLI option. 'project' means no target
+     * option (whole project). Both 'web' and 'api' resolve by route URI
+     * (--api), and both 'command' and 'file' resolve to a file path (--file).
+     *
+     * @var array<string,?string>
+     */
+    private const TARGET_OPTION = [
+        'project' => null,
+        'module'  => 'module',
+        'api'     => 'api',
+        'web'     => 'api',
+        'file'    => 'file',
+        'command' => 'file',
+        'path'    => 'path',
     ];
 
     public function __construct(private readonly RunStore $runs)
@@ -64,9 +88,17 @@ class DashboardController
 
     public function create(): Response
     {
+        $meta    = ProjectMetadata::forCurrentApp();
+        $routes  = $meta->routes();
+
         return response()->view('codeguardian::create', [
-            'operations' => self::OPERATIONS,
-            'aiReady'    => $this->aiStatus(),
+            'operations'  => self::OPERATIONS,
+            'aiReady'     => $this->aiStatus(),
+            'modules'     => $meta->modules(),
+            'apiRoutes'   => $routes['api'],
+            'webRoutes'   => $routes['web'],
+            'commands'    => $meta->commands(),
+            'targetLabels'=> $this->targetLabels(),
         ]);
     }
 
@@ -79,6 +111,32 @@ class DashboardController
 
         $spec    = self::OPERATIONS[$operation];
         $options = $this->collectOptions($request, $spec['options'], $operation);
+
+        // Resolve the chosen target (dropdown) into the right CLI option.
+        $targetType  = (string) $request->input('target_type', 'project');
+        $targetValue = trim((string) $request->input('target_value', ''));
+
+        if (! in_array($targetType, $spec['targets'], true)) {
+            return back()->withInput()->with('cg_error', 'That target is not valid for this operation.');
+        }
+
+        $targetOption = self::TARGET_OPTION[$targetType] ?? null;
+        if ($targetOption !== null) {
+            if ($targetValue === '') {
+                return back()->withInput()->with('cg_error', 'Please choose a ' . $targetType . ' target.');
+            }
+
+            // A command is picked by name; resolve it to the file that defines it.
+            if ($targetType === 'command') {
+                $file = ProjectMetadata::forCurrentApp()->commandFile($targetValue);
+                if ($file === null) {
+                    return back()->withInput()->with('cg_error', "Command '{$targetValue}' not found.");
+                }
+                $targetValue = $file;
+            }
+
+            $options[$targetOption] = $targetValue;
+        }
 
         $label = $this->buildLabel($spec['label'], $options);
 
@@ -175,6 +233,20 @@ class DashboardController
         }
 
         return $options;
+    }
+
+    /** Human labels for each target type (used by the form dropdown). */
+    private function targetLabels(): array
+    {
+        return [
+            'project' => 'Whole project',
+            'module'  => 'Module',
+            'api'     => 'API route',
+            'web'     => 'Web route',
+            'file'    => 'File',
+            'command' => 'Artisan command',
+            'path'    => 'Directory path',
+        ];
     }
 
     /** @param array<string,string|bool> $options */

@@ -51,6 +51,36 @@ class DashboardRoutesTest extends TestCase
     }
 
     /** @test */
+    public function test_new_run_page_renders_target_dropdowns(): void
+    {
+        $this->get('/codeguardian/new')
+            ->assertOk()
+            ->assertSee('target_type', false)        // target-type <select>
+            ->assertSee('Whole project')             // a target label
+            ->assertSee('id="dl-api"', false)        // searchable route datalist
+            ->assertSee('id="dl-command"', false);   // searchable command datalist
+    }
+
+    /** @test */
+    public function test_invalid_target_for_operation_is_rejected(): void
+    {
+        $this->startSession();
+
+        // 'module' is not a valid target for a security audit.
+        $this->post('/codeguardian/runs', [
+            '_token'       => csrf_token(),
+            'operation'    => 'security',
+            'target_type'  => 'module',
+            'target_value' => 'User',
+        ])->assertRedirect();
+
+        $this->assertEquals(
+            'That target is not valid for this operation.',
+            session('cg_error')
+        );
+    }
+
+    /** @test */
     public function test_unknown_run_returns_404(): void
     {
         $this->get('/codeguardian/runs/does-not-exist')->assertNotFound();

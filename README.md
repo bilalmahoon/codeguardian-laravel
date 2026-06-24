@@ -33,7 +33,7 @@ https://your-app.test/codeguardian
 
 From there you can:
 
-- **Run everything from the browser** — analyze, security audit, performance review, generate tests, and refactor (by API route, module, file, or whole project).
+- **Run everything from the browser** — analyze, security audit, performance review, generate tests, and refactor. Pick the target from **searchable dropdowns** (module list, API routes, web routes, artisan commands) instead of typing it by hand.
 - **Watch live progress** — each run executes in the background and streams its console output to the page in real time.
 - **Browse full history** — every past run is listed with its type, target, status, and a link to open its saved HTML/JSON report.
 
