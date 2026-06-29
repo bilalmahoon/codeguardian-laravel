@@ -153,6 +153,16 @@ codeguardian:
 
 **Azure DevOps:** publish the `*.sarif` as a build artifact; the *SARIF SAST Scans Tab* extension renders it.
 
+### GitHub inline PR annotations (zero setup)
+
+Don't want to wire up SARIF upload? Pass `--annotate` (auto-enabled when running inside GitHub Actions) and findings show up as inline annotations on the PR's "Files changed" view — no extra action, no upload:
+
+```yaml
+- run: php artisan codeguardian:analyze --annotate --plain
+```
+
+Severities map to `::error` (critical/high), `::warning` (medium), and `::notice` (low); the most severe findings are emitted first (capped to avoid noise).
+
 ### JUnit — CI "Tests" panels
 
 `--format=junit` writes JUnit XML where every finding is a failed `<testcase>`, grouped into a `<testsuite>` per analyzer. This lights up the native test report UI in GitHub Actions test reporters, GitLab, Jenkins, CircleCI, Azure DevOps, and Bitbucket.
@@ -176,7 +186,7 @@ php artisan codeguardian:trend --limit=50
 php artisan codeguardian:trend --json     # for dashboards
 ```
 
-Disable recording for a single run with `--no-history`; change the location via `codeguardian.output.history_file`.
+Disable recording for a single run with `--no-history`; change the location via `codeguardian.output.history_file`. The **HTML report** also embeds a quality-score sparkline of recent runs in its executive summary.
 
 ### Baseline / diff — fail only on new findings
 

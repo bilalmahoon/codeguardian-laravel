@@ -105,6 +105,55 @@ class EnterpriseReportTest extends TestCase
     }
 
     /** @test */
+    public function test_html_report_embeds_trend_sparkline(): void
+    {
+        $results = [
+            'project_name'  => 'demo',
+            'overall_score' => 80,
+            'grade'         => 'B',
+            'summary'       => ['total_issues' => 3, 'critical' => 0, 'high' => 1, 'medium' => 1, 'low' => 1],
+            'history'       => [
+                ['score' => 60], ['score' => 70], ['score' => 80],
+            ],
+        ];
+
+        $dir   = sys_get_temp_dir() . '/cg-html-' . uniqid();
+        $paths = (new ReportFormatter())->save($results, $dir, 'html');
+        $html  = file_get_contents($paths[0]);
+
+        $this->assertStringContainsString('Quality trend', $html);
+        $this->assertStringContainsString('<polyline', $html);
+
+        foreach ($paths as $p) {
+            @unlink($p);
+        }
+        @rmdir($dir);
+    }
+
+    /** @test */
+    public function test_html_report_omits_trend_with_insufficient_history(): void
+    {
+        $results = [
+            'project_name'  => 'demo',
+            'overall_score' => 80,
+            'grade'         => 'B',
+            'summary'       => ['total_issues' => 0, 'critical' => 0, 'high' => 0, 'medium' => 0, 'low' => 0],
+            'history'       => [['score' => 80]],
+        ];
+
+        $dir   = sys_get_temp_dir() . '/cg-html2-' . uniqid();
+        $paths = (new ReportFormatter())->save($results, $dir, 'html');
+        $html  = file_get_contents($paths[0]);
+
+        $this->assertStringNotContainsString('Quality trend', $html);
+
+        foreach ($paths as $p) {
+            @unlink($p);
+        }
+        @rmdir($dir);
+    }
+
+    /** @test */
     public function test_save_writes_sarif_file(): void
     {
         $results = [

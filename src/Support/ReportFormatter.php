@@ -234,6 +234,9 @@ class ReportFormatter
   .exec-stats { display: flex; flex-wrap: wrap; gap: 1.5rem; margin-top: 1rem; }
   .exec-stat { font-size: .85rem; color: #94a3b8; }
   .exec-stat b { display: block; font-size: 1.4rem; color: #e2e8f0; }
+  .trend { margin-top: 1.25rem; }
+  .trend-label { font-size: .8rem; color: #94a3b8; margin-bottom: .25rem; }
+  .trend svg { background: #0b1220; border: 1px solid #1e293b; border-radius: 8px; }
   .dim { background: #1e293b; border-radius: .6rem; padding: 1rem 1.25rem; margin-bottom: .6rem; }
   .dim-head { display: flex; justify-content: space-between; align-items: baseline; }
   .dim-name { font-weight: 700; font-size: .95rem; }
@@ -312,6 +315,8 @@ HTML;
             ? "<div class=\"exec-stat\"><b>{$riskScore}/100</b>Risk · {$riskLevel}</div>"
             : '';
 
+        $trendHtml = $this->renderTrend($results['history'] ?? []);
+
         return <<<HTML
 <section class="exec">
   <h2>Executive Summary</h2>
@@ -324,7 +329,61 @@ HTML;
     <div class="exec-stat"><b>{$high}</b>High</div>
     <div class="exec-stat"><b>{$files}</b>Files scanned</div>
   </div>
+  {$trendHtml}
 </section>
+HTML;
+    }
+
+    /**
+     * Inline SVG sparkline of the overall quality score across recent runs.
+     *
+     * @param array<int,array<string,mixed>> $history
+     */
+    private function renderTrend(array $history): string
+    {
+        $scores = [];
+        foreach ($history as $h) {
+            if (is_numeric($h['score'] ?? null)) {
+                $scores[] = (float) $h['score'];
+            }
+        }
+
+        if (count($scores) < 2) {
+            return '';
+        }
+
+        $w = 240;
+        $h = 48;
+        $pad = 4;
+        $min = min($scores);
+        $max = max($scores);
+        $span = max(1.0, $max - $min);
+        $n = count($scores);
+
+        $points = [];
+        foreach ($scores as $i => $s) {
+            $x = $pad + ($i / ($n - 1)) * ($w - 2 * $pad);
+            $y = $pad + (1 - ($s - $min) / $span) * ($h - 2 * $pad);
+            $points[] = round($x, 1) . ',' . round($y, 1);
+        }
+        $poly = implode(' ', $points);
+
+        $first = (int) round($scores[0]);
+        $last  = (int) round(end($scores));
+        $delta = $last - $first;
+        $color = $delta > 0 ? '#22c55e' : ($delta < 0 ? '#ef4444' : '#64748b');
+        $arrow = $delta > 0 ? '▲' : ($delta < 0 ? '▼' : '◆');
+        $sign  = $delta > 0 ? '+' : '';
+        [$cx, $cy] = explode(',', end($points));
+
+        return <<<HTML
+<div class="trend">
+  <div class="trend-label">Quality trend · last {$n} runs <span style="color:{$color}">{$arrow} {$sign}{$delta}</span></div>
+  <svg width="{$w}" height="{$h}" viewBox="0 0 {$w} {$h}" preserveAspectRatio="none" role="img" aria-label="Quality score trend">
+    <polyline fill="none" stroke="{$color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="{$poly}" />
+    <circle cx="{$cx}" cy="{$cy}" r="3" fill="{$color}" />
+  </svg>
+</div>
 HTML;
     }
 

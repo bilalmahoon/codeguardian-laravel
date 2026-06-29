@@ -13,6 +13,7 @@ use CodeGuardian\Laravel\Support\AiClient;
 use CodeGuardian\Laravel\Support\Baseline;
 use CodeGuardian\Laravel\Support\CodeScanner;
 use CodeGuardian\Laravel\Support\FindingFilter;
+use CodeGuardian\Laravel\Support\GitHubAnnotations;
 use CodeGuardian\Laravel\Support\HistoryStore;
 use CodeGuardian\Laravel\Support\QualityScorer;
 use CodeGuardian\Laravel\Support\ReportFormatter;
@@ -44,6 +45,7 @@ class AnalyzeCommand extends Command
                             {--plain     : Disable the live progress UI (plain log output, ideal for CI)}
                             {--fail-on=  : Exit non-zero if any finding is at or above this severity: critical|high|medium|low}
                             {--no-suppress      : Ignore config/inline suppressions (show everything)}
+                            {--annotate         : Emit GitHub Actions inline PR annotations (auto-on in GitHub Actions)}
                             {--no-history       : Do not record this run in the trend history}
                             {--write-baseline   : Save the current findings as the baseline file}
                             {--against-baseline : Compare findings against the baseline (new vs existing vs fixed)}
@@ -190,6 +192,20 @@ class AnalyzeCommand extends Command
         $this->newLine();
         $this->printSummary($results, $mode);
 
+        // Record this run for trend tracking (codeguardian:trend), then attach
+        // the recent trend so the HTML report can chart it (incl. this run).
+        // Opt-out via --no-history; skipped automatically with --no-report.
+        if (! $noReport) {
+            $history = HistoryStore::fromConfig();
+            if (! $this->option('no-history')) {
+                $history->record($results, [
+                    'scope' => $apiOpt ? "api:{$apiOpt}" : ($moduleOpt ? "module:{$moduleOpt}" : 'project'),
+                    'mode'  => $mode,
+                ]);
+            }
+            $results['history'] = $history->recent(30);
+        }
+
         // Save reports
         if (! $noReport) {
             $outputDir = $this->option('output')
@@ -204,13 +220,12 @@ class AnalyzeCommand extends Command
             }
         }
 
-        // Record this run for trend tracking (codeguardian:trend). Opt-out via
-        // --no-history; skipped automatically with --no-report.
-        if (! $noReport && ! $this->option('no-history')) {
-            HistoryStore::fromConfig()->record($results, [
-                'scope' => $apiOpt ? "api:{$apiOpt}" : ($moduleOpt ? "module:{$moduleOpt}" : 'project'),
-                'mode'  => $mode,
-            ]);
+        // GitHub Actions inline PR annotations — explicit --annotate, or auto
+        // when running inside a GitHub Actions job.
+        if ($this->option('annotate') || getenv('GITHUB_ACTIONS') === 'true') {
+            foreach (GitHubAnnotations::lines($results, 50) as $cmd) {
+                $this->output->writeln($cmd);
+            }
         }
 
         $this->newLine();
