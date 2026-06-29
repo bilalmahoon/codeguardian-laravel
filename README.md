@@ -64,6 +64,62 @@ Project Discovery → Scanning → ┌ Architecture ┐
 
 Progress is driven by **real** per-file/per-stage events emitted by the analysis engine — not simulated — so the percentage, ETA, and "current file" reflect actual work.
 
+### Refactoring pipeline
+
+`refactor` runs as a **7-stage pipeline** — Project Discovery → Static Analysis → Test Generation → Baseline Tests → Refactoring → Final Verification → Report Generation — with a per-stage time breakdown at the end. Because refactoring is interactive (diffs, prompts, test output) it renders as a clean scrolling staged log rather than a single repainting block. Use `--plain` for plain step headers.
+
+Every recommended change ships with a **justification card** — refactoring is never proposed without explaining itself:
+
+```
+  CRITICAL Possible OS command injection
+    Why       Untrusted data reaches an OS command sink.
+    Benefit   Remote code execution on the server.
+    Breaking  medium
+    Effort    medium
+    Confidence high
+    Standard  OWASP A03:2021-Injection · CWE-78
+    Fix       Use escapeshellarg() on every argument, or Symfony Process.
+```
+
+---
+
+## Enterprise reporting
+
+Every analysis produces an enterprise-quality report (console + HTML) with an **executive summary** and a **six-dimension quality scorecard**, each with a 0–100 score, a letter grade, and plain-English reasoning:
+
+| Dimension | What it measures |
+|---|---|
+| **Architecture** | Structure, layering, SOLID, coupling |
+| **Security** | Resistance to the OWASP Top 10 / known weaknesses |
+| **Performance** | Query efficiency, CPU cost, scalability |
+| **Maintainability** | Complexity, duplication, readability |
+| **Testability** | How easily the code can be unit-tested |
+| **Reliability** | Error handling and operational fail-safes |
+
+```
+  QUALITY DIMENSIONS:
+  Architecture     ██████████░░░░░░   64/100  (D)
+  Security         █████░░░░░░░░░░░   34/100  (F)
+  Performance      █████████████░░░   82/100  (B)
+  Maintainability  ████████░░░░░░░░   55/100  (F)
+  Testability      ███████░░░░░░░░░   48/100  (F)
+  Reliability      ████████████░░░░   72/100  (C)
+
+  Composite quality: 59/100  (Grade F)
+```
+
+The HTML report adds an **Executive Summary** card (headline verdict, grade, risk level, key counts) and a visual **Quality Dimensions** scorecard above the detailed findings — suitable for sharing with leadership.
+
+Reports are available in multiple formats via `--format`:
+
+```bash
+php artisan codeguardian:analyze --format=json   # machine-readable
+php artisan codeguardian:analyze --format=html   # rich dashboard
+php artisan codeguardian:analyze --format=md     # Markdown — ideal for CI artifacts / PR comments
+php artisan codeguardian:analyze --format=both   # json + html (default)
+php artisan codeguardian:analyze --format=all    # json + html + md
+```
+
 ---
 
 ## Web Dashboard

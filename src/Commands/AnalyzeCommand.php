@@ -6,10 +6,12 @@ namespace CodeGuardian\Laravel\Commands;
 
 use CodeGuardian\Laravel\Analyzers\StaticOrchestrator;
 use CodeGuardian\Laravel\Console\ConsoleReporter;
+use CodeGuardian\Laravel\Console\ProgressFormat;
 use CodeGuardian\Laravel\PackageOrchestrator;
 use CodeGuardian\Laravel\Support\AiClient;
 use CodeGuardian\Laravel\Support\CodeScanner;
 use CodeGuardian\Laravel\Support\FindingFilter;
+use CodeGuardian\Laravel\Support\QualityScorer;
 use CodeGuardian\Laravel\Support\ReportFormatter;
 use CodeGuardian\Laravel\Support\RiskScorer;
 use Illuminate\Console\Command;
@@ -23,7 +25,7 @@ class AnalyzeCommand extends Command
                             {--type=     : Project type: laravel or flutter (auto-detected if omitted)}
                             {--agents=   : Comma-separated agents: architect,security,performance,tech_debt (default: all)}
                             {--output=   : Output directory for reports (default: storage/codeguardian/reports)}
-                            {--format=   : Report format: json, html, or both (default: both)}
+                            {--format=   : Report format: json, html, md, both, or all (default: both)}
                             {--mode=     : Engine mode: static | hybrid (static + Claude AI) | ai (Claude only)}
                             {--refactor  : After analysis, start interactive refactoring workflow}
                             {--severity=     : Filter findings by severity (csv): critical,high,medium,low}
@@ -130,6 +132,13 @@ class AnalyzeCommand extends Command
         $results['summary']['risk_score']     = $risk['risk_score'];
         $results['summary']['risk_level']     = $risk['risk_level'];
         $results['summary']['risk_reasoning'] = $risk['reasoning'];
+
+        // Enterprise quality dimensions (architecture/security/performance/
+        // maintainability/testability/reliability) — anchored to analyzer scores.
+        $results['quality'] = QualityScorer::assess(
+            $results['all_findings'] ?? [],
+            $results['scores'] ?? []
+        );
 
         $this->newLine();
         $this->printSummary($results, $mode);
@@ -615,7 +624,32 @@ class AnalyzeCommand extends Command
             }
         }
 
+        $this->printQualityDimensions($results['quality'] ?? null);
+
         $this->info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    }
+
+    /** Render the enterprise quality dimensions as a compact scorecard. */
+    private function printQualityDimensions(?array $quality): void
+    {
+        if (empty($quality['dimensions'])) {
+            return;
+        }
+
+        $this->newLine();
+        $this->info('  QUALITY DIMENSIONS:');
+        foreach ($quality['dimensions'] as $dim) {
+            $score = (int) ($dim['score'] ?? 0);
+            $bar   = ProgressFormat::bar($score, 16);
+            $color = $score >= 80 ? 'info' : ($score >= 60 ? 'warn' : 'error');
+            $label = str_pad((string) ($dim['label'] ?? ''), 16);
+            $this->{$color}(sprintf('  %s %s  %3d/100  (%s)', $label, $bar, $score, $dim['grade'] ?? '?'));
+        }
+
+        if (isset($quality['overall'])) {
+            $this->newLine();
+            $this->line('  Composite quality: ' . $quality['overall'] . '/100  (Grade ' . ($quality['grade'] ?? '?') . ')');
+        }
     }
 
     private function detectProjectType(string $path): string

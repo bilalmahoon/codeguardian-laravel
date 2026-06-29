@@ -6,6 +6,8 @@ namespace CodeGuardian\Laravel\Commands;
 
 use CodeGuardian\Laravel\Agents\RefactorAgent;
 use CodeGuardian\Laravel\Analyzers\StaticOrchestrator;
+use CodeGuardian\Laravel\Console\ConsoleReporter;
+use CodeGuardian\Laravel\Console\JustificationCard;
 use CodeGuardian\Laravel\Support\AiClient;
 use CodeGuardian\Laravel\Support\CodeScanner;
 use CodeGuardian\Laravel\Support\ModuleDetector;
@@ -90,6 +92,7 @@ class RefactorCommand extends Command
                             {--safe                 : Foolproof mode — auto-rollback any file whose refactor introduces a NEW test failure (no prompts)}
                             {--no-backup            : Skip creating backups before modifying files}
                             {--skip-tests           : Skip test execution (not recommended)}
+                            {--plain                : Disable the live staged pipeline UI (plain headers)}
                             {--with-existing-tests  : Also run the project existing tests (tests/Feature, tests/Unit) to detect breaking changes}';
 
     protected $description = 'Analyze → write tests → refactor → verify tests → report (full interactive workflow)';
@@ -119,6 +122,38 @@ class RefactorCommand extends Command
 
     /** @var StaticOrchestrator  Single instance shared across all workflow steps */
     private StaticOrchestrator $orchestrator;
+
+    /** Premium staged pipeline reporter (null when --plain). */
+    private ?ConsoleReporter $reporter = null;
+
+    /** The 7-stage refactoring pipeline, in execution order. */
+    private const PIPELINE_STAGES = [
+        ['key' => 'discovery', 'label' => 'Project Discovery'],
+        ['key' => 'analysis',  'label' => 'Static Analysis'],
+        ['key' => 'tests',     'label' => 'Test Generation'],
+        ['key' => 'baseline',  'label' => 'Baseline Tests'],
+        ['key' => 'refactor',  'label' => 'Refactoring'],
+        ['key' => 'verify',    'label' => 'Final Verification'],
+        ['key' => 'report',    'label' => 'Report Generation'],
+    ];
+
+    /**
+     * Transition the pipeline to a new stage. Finishes the previously-running
+     * stage, starts the next one. Falls back to a plain banner when --plain.
+     */
+    private function phase(string $key, string $title): void
+    {
+        if ($this->reporter === null) {
+            $this->section($title);
+            return;
+        }
+
+        $current = $this->reporter->pipeline()->currentStage();
+        if ($current !== null) {
+            $this->reporter->finish($current['key']);
+        }
+        $this->reporter->start($key);
+    }
 
     public function handle(
         CodeScanner     $scanner,
@@ -152,6 +187,19 @@ class RefactorCommand extends Command
         }
 
         $this->printBanner();
+
+        // Premium staged pipeline (non-decorated: a clean scrolling log that
+        // coexists with interactive prompts & diffs). Disabled with --plain.
+        if (! $this->option('plain')) {
+            $this->reporter = new ConsoleReporter(
+                $this->output,
+                self::PIPELINE_STAGES,
+                'CodeGuardian · Refactor',
+                false
+            );
+        }
+
+        $this->phase('discovery', 'STEP 0 — DISCOVERY');
 
         // ── Step 1: Determine scope ──────────────────────────────────────────
         $scope    = $this->determineScope();
@@ -199,7 +247,7 @@ class RefactorCommand extends Command
         $this->newLine();
 
         // ── Step 2: Analyze ──────────────────────────────────────────────────
-        $this->section('STEP 1/5 — ANALYZING CODE');
+        $this->phase('analysis', 'STEP 1/5 — ANALYZING CODE');
         $analysisResults = $this->runAnalysis($context);
 
         if (empty($analysisResults['agent_results'])) {
@@ -242,13 +290,13 @@ class RefactorCommand extends Command
         }
 
         // ── Step 4: Generate tests BEFORE any code change ───────────────────
-        $this->section('STEP 2/5 — WRITING TESTS (before refactoring)');
+        $this->phase('tests', 'STEP 2/5 — WRITING TESTS (before refactoring)');
         $generatedTestFiles = $this->generateAndWriteTests($analysisResults, $context);
 
         // ── Step 5: Run baseline tests ───────────────────────────────────────
         $baselineResult = null;
         if ($this->testsEnabled) {
-            $this->section('STEP 3/5 — BASELINE TESTS (before any change)');
+            $this->phase('baseline', 'STEP 3/5 — BASELINE TESTS (before any change)');
 
             if ($this->existingTestsEnabled) {
                 $this->line('  Running CodeGuardian stubs + project existing tests...');
@@ -275,13 +323,13 @@ class RefactorCommand extends Command
         }
 
         // ── Step 6: Refactor files one-by-one ───────────────────────────────
-        $this->section('STEP 4/5 — REFACTORING');
+        $this->phase('refactor', 'STEP 4/5 — REFACTORING');
         $refactorResults = $this->runRefactoring($analysisResults, $context);
 
         // ── Step 7: Verify tests pass after refactoring ──────────────────────
         $finalTestResult = null;
         if ($this->testsEnabled) {
-            $this->section('STEP 5/5 — FINAL TEST VERIFICATION');
+            $this->phase('verify', 'STEP 5/5 — FINAL TEST VERIFICATION');
             $label = $this->existingTestsEnabled
                 ? 'CodeGuardian stubs + project existing tests'
                 : 'CodeGuardian stubs';
@@ -311,7 +359,7 @@ class RefactorCommand extends Command
         }
 
         // ── Step 8: Generate final report ───────────────────────────────────
-        $this->section('GENERATING FINAL REPORT');
+        $this->phase('report', 'GENERATING FINAL REPORT');
         $finalReport = $this->buildFinalReport($analysisResults, $refactorResults, $baselineResult, $finalTestResult);
 
         $outputDir = storage_path(config('codeguardian.output.report_dir', 'codeguardian/reports'));
@@ -321,6 +369,16 @@ class RefactorCommand extends Command
         $this->info('  📄 Reports saved:');
         foreach ($paths as $p) {
             $this->line("     → {$p}");
+        }
+
+        // Close out the pipeline + show the per-stage time breakdown.
+        if ($this->reporter !== null) {
+            $current = $this->reporter->pipeline()->currentStage();
+            if ($current !== null) {
+                $this->reporter->finish($current['key']);
+            }
+            $this->newLine();
+            $this->reporter->executionStats();
         }
 
         $this->printFinalSummary($refactorResults, $finalTestResult);
@@ -553,11 +611,9 @@ class RefactorCommand extends Command
             $this->newLine();
             $this->info("  [{$fileCount}/{$totalFiles}] {$filePath}");
 
-            foreach ($issues as $issue) {
-                $sev   = strtoupper($issue['severity'] ?? 'medium');
-                $title = mb_substr($issue['title'] ?? 'Issue', 0, 80);
-                $this->line("    [{$sev}] {$title}");
-            }
+            // Justify WHY each change is recommended (why / benefit / risk /
+            // effort / breaking-change / taxonomy) — never refactor blindly.
+            $this->renderJustifications($issues);
 
             // ── Resolve + validate file path ────────────────────────────────
             $candidatePath = $projectRealPath . DIRECTORY_SEPARATOR . ltrim($filePath, '/\\');
@@ -1308,6 +1364,36 @@ class RefactorCommand extends Command
             if (! empty($failure['message'])) {
                 $this->line("           {$failure['message']}");
             }
+        }
+    }
+
+    /**
+     * Render justification cards for the issues in a file (most severe first),
+     * capped so a busy file doesn't flood the terminal.
+     *
+     * @param array<int,array<string,mixed>> $issues
+     */
+    private function renderJustifications(array $issues): void
+    {
+        if (empty($issues)) {
+            return;
+        }
+
+        $rank = ['critical' => 0, 'high' => 1, 'medium' => 2, 'low' => 3];
+        usort($issues, fn($a, $b) =>
+            ($rank[$a['severity'] ?? 'low'] ?? 4) <=> ($rank[$b['severity'] ?? 'low'] ?? 4)
+        );
+
+        $shown = 0;
+        foreach ($issues as $issue) {
+            if ($shown >= 3) {
+                $remaining = count($issues) - $shown;
+                $this->line("    <fg=gray>… and {$remaining} more issue(s) in this file</>");
+                break;
+            }
+            JustificationCard::render($this->output, $issue);
+            $this->newLine();
+            $shown++;
         }
     }
 
