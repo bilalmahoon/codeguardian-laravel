@@ -52,6 +52,9 @@ class AnalyzeCommand extends Command
                             {--owasp=        : Filter findings by OWASP tag substring (csv), e.g. A03,A01}
                             {--cwe=          : Filter findings by CWE id substring (csv), e.g. CWE-89}
                             {--plain     : Disable the live progress UI (plain log output, ideal for CI)}
+                            {--parallel        : Run analyzers in parallel processes (faster on large codebases)}
+                            {--no-parallel     : Force sequential analysis even if parallel is enabled in config}
+                            {--gate            : Enforce the quality gates/budgets from config (codeguardian.gates)}
                             {--fail-on=  : Exit non-zero if any finding is at or above this severity: critical|high|medium|low}
                             {--no-suppress      : Ignore config/inline suppressions (show everything)}
                             {--annotate         : Emit GitHub Actions inline PR annotations (auto-on in GitHub Actions)}
@@ -254,6 +257,24 @@ class AnalyzeCommand extends Command
         $this->newLine();
 
         $this->maybeOfferFix($results, $path, $type, $moduleOpt, $apiOpt, $noReport);
+
+        // Quality gates / budgets — enforced whenever they are configured (the
+        // --gate flag is accepted for explicitness). A violation fails the run
+        // regardless of individual severity counts.
+        $gates = \CodeGuardian\Laravel\Support\QualityGate::fromConfig();
+        if (! \CodeGuardian\Laravel\Support\QualityGate::isEmpty($gates)) {
+            $verdict = \CodeGuardian\Laravel\Support\QualityGate::evaluate($results, $gates);
+            $this->newLine();
+            if ($verdict['passed']) {
+                $this->info('  ✅ Quality gates passed.');
+            } else {
+                $this->error('  ❌ Quality gates FAILED:');
+                foreach ($verdict['violations'] as $v) {
+                    $this->line('     • ' . $v['message']);
+                }
+                return self::FAILURE;
+            }
+        }
 
         // Explicit CI gate: fail if any finding meets the --fail-on threshold.
         $failOn = $this->option('fail-on');
@@ -570,20 +591,56 @@ class AnalyzeCommand extends Command
         $orchestrator    = new StaticOrchestrator();
         $requestedAgents = $this->resolveRequestedAgents();
 
-        $options = [
-            'architecture' => empty($requestedAgents) || in_array('architect', $requestedAgents),
-            'security'     => empty($requestedAgents) || in_array('security', $requestedAgents),
-            'performance'  => empty($requestedAgents) || in_array('performance', $requestedAgents),
-            'tech_debt'    => empty($requestedAgents) || in_array('tech_debt', $requestedAgents),
-        ];
+        $options = $this->buildAnalyzerOptions($requestedAgents, $files);
+        // Non-live path can safely fan analyzers out across processes.
+        $options['parallel'] = $this->shouldRunParallel();
 
-        foreach (array_keys(array_filter($options)) as $name) {
+        foreach (array_keys(array_filter($options, fn($v, $k) => $v === true && $k !== 'parallel', ARRAY_FILTER_USE_BOTH)) as $name) {
             $this->line("  Running {$name} analyzer...");
+        }
+        if ($options['parallel']) {
+            $this->line('  ⚙  Parallel mode enabled (multi-process).');
         }
 
         $result = $orchestrator->analyze($files, $options, $scanPath);
 
         return $this->normalizeStaticResult($result, $scanPath);
+    }
+
+    /**
+     * Resolve which analyzers to run from --agents (empty = all). Dart is only
+     * enabled when the scan actually contains Dart files (or it was requested).
+     *
+     * @param  list<string>          $requestedAgents
+     * @param  array<string,string>  $files
+     * @return array<string,bool>
+     */
+    private function buildAnalyzerOptions(array $requestedAgents, array $files): array
+    {
+        $all      = empty($requestedAgents);
+        $hasDart  = false;
+        foreach (array_keys($files) as $p) {
+            if (str_ends_with((string) $p, '.dart')) { $hasDart = true; break; }
+        }
+
+        return [
+            'architecture' => $all || in_array('architect', $requestedAgents, true),
+            'security'     => $all || in_array('security', $requestedAgents, true),
+            'performance'  => $all || in_array('performance', $requestedAgents, true),
+            'tech_debt'    => $all || in_array('tech_debt', $requestedAgents, true),
+            'database'     => $all || in_array('database', $requestedAgents, true),
+            'dart'         => in_array('dart', $requestedAgents, true) || ($all && $hasDart),
+        ];
+    }
+
+    /** Parallel static analysis: --parallel flag or config, when supported. */
+    private function shouldRunParallel(): bool
+    {
+        if ($this->option('no-parallel')) {
+            return false;
+        }
+        $want = (bool) $this->option('parallel') || (bool) config('codeguardian.analysis.parallel', false);
+        return $want && \CodeGuardian\Laravel\Support\ParallelRunner::available();
     }
 
     /**
@@ -594,18 +651,15 @@ class AnalyzeCommand extends Command
     private function runStaticAnalysisLive(array $files, string $scanPath): ?array
     {
         $requestedAgents = $this->resolveRequestedAgents();
-        $options = [
-            'architecture' => empty($requestedAgents) || in_array('architect', $requestedAgents),
-            'security'     => empty($requestedAgents) || in_array('security', $requestedAgents),
-            'performance'  => empty($requestedAgents) || in_array('performance', $requestedAgents),
-            'tech_debt'    => empty($requestedAgents) || in_array('tech_debt', $requestedAgents),
-        ];
+        $options = $this->buildAnalyzerOptions($requestedAgents, $files);
 
         $stageLabels = [
             'architecture' => 'Architecture Analysis',
             'security'     => 'Security Analysis',
             'performance'  => 'Performance Analysis',
             'tech_debt'    => 'Tech-Debt Analysis',
+            'database'     => 'Database Analysis',
+            'dart'         => 'Flutter/Dart Analysis',
         ];
 
         $stages = [];
@@ -618,7 +672,7 @@ class AnalyzeCommand extends Command
         $reporter->setCount('rules', count($stages));
 
         // orchestrator emits 'architect' for the architecture analyzer.
-        $stageMap   = ['architect' => 'architecture', 'security' => 'security', 'performance' => 'performance', 'tech_debt' => 'tech_debt'];
+        $stageMap   = ['architect' => 'architecture', 'security' => 'security', 'performance' => 'performance', 'tech_debt' => 'tech_debt', 'database' => 'database', 'dart' => 'dart'];
         $fileCount  = count($files);
         $onProgress = function (string $event, array $data) use ($reporter, $stageMap, $fileCount): void {
             $stage = $stageMap[$data['stage']] ?? $data['stage'];

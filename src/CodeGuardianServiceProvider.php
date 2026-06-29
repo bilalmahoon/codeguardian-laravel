@@ -5,23 +5,29 @@ declare(strict_types=1);
 namespace CodeGuardian\Laravel;
 
 use CodeGuardian\Laravel\Analyzers\ArchitectureAnalyzer;
+use CodeGuardian\Laravel\Analyzers\DartAnalyzer;
+use CodeGuardian\Laravel\Analyzers\DatabaseAnalyzer;
 use CodeGuardian\Laravel\Analyzers\PerformanceAnalyzer;
 use CodeGuardian\Laravel\Analyzers\SecurityAnalyzer;
 use CodeGuardian\Laravel\Analyzers\StaticOrchestrator;
 use CodeGuardian\Laravel\Analyzers\StaticTestGenerator;
 use CodeGuardian\Laravel\Analyzers\TechDebtAnalyzer;
 use CodeGuardian\Laravel\Commands\AnalyzeCommand;
+use CodeGuardian\Laravel\Commands\AuditCommand;
 use CodeGuardian\Laravel\Commands\CommentCommand;
 use CodeGuardian\Laravel\Commands\DoctorCommand;
 use CodeGuardian\Laravel\Commands\FixCommand;
+use CodeGuardian\Laravel\Commands\GraphCommand;
 use CodeGuardian\Laravel\Commands\InitCommand;
 use CodeGuardian\Laravel\Commands\GenerateTestsCommand;
 use CodeGuardian\Laravel\Commands\PerformanceScanCommand;
 use CodeGuardian\Laravel\Commands\RefactorCommand;
 use CodeGuardian\Laravel\Commands\ReportCommand;
+use CodeGuardian\Laravel\Commands\ReviewCommand;
 use CodeGuardian\Laravel\Commands\RulesCommand;
 use CodeGuardian\Laravel\Commands\TrendCommand;
 use CodeGuardian\Laravel\Commands\SecurityScanCommand;
+use CodeGuardian\Laravel\Commands\WatchCommand;
 use CodeGuardian\Laravel\Http\Middleware\Authorize;
 use CodeGuardian\Laravel\Support\CachedPhpParser;
 use CodeGuardian\Laravel\Support\FileTypeDetector;
@@ -46,6 +52,8 @@ class CodeGuardianServiceProvider extends ServiceProvider
         $this->app->singleton(SecurityAnalyzer::class);
         $this->app->singleton(PerformanceAnalyzer::class);
         $this->app->singleton(TechDebtAnalyzer::class);
+        $this->app->singleton(DatabaseAnalyzer::class);
+        $this->app->singleton(DartAnalyzer::class);
         $this->app->singleton(StaticTestGenerator::class);
 
         // StaticOrchestrator receives its analyzers via constructor — resolved by the container
@@ -55,6 +63,8 @@ class CodeGuardianServiceProvider extends ServiceProvider
             $app->make(PerformanceAnalyzer::class),
             $app->make(TechDebtAnalyzer::class),
             $app->make(StaticTestGenerator::class),
+            $app->make(DatabaseAnalyzer::class),
+            $app->make(DartAnalyzer::class),
         ));
 
         // Web dashboard run/history store
@@ -91,6 +101,10 @@ class CodeGuardianServiceProvider extends ServiceProvider
                 CommentCommand::class,
                 InitCommand::class,
                 FixCommand::class,
+                AuditCommand::class,
+                WatchCommand::class,
+                GraphCommand::class,
+                ReviewCommand::class,
             ]);
         }
     }

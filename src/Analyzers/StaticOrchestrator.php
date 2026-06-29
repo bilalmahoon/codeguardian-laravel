@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CodeGuardian\Laravel\Analyzers;
 
 use CodeGuardian\Laravel\Support\CachedPhpParser;
+use CodeGuardian\Laravel\Support\ParallelRunner;
 use Illuminate\Support\Facades\File;
 
 /**
@@ -26,6 +27,8 @@ class StaticOrchestrator
     private SecurityAnalyzer     $security;
     private PerformanceAnalyzer  $performance;
     private TechDebtAnalyzer     $techDebt;
+    private DatabaseAnalyzer     $database;
+    private DartAnalyzer         $dart;
     private StaticTestGenerator  $testGenerator;
 
     public function __construct(
@@ -34,11 +37,15 @@ class StaticOrchestrator
         ?PerformanceAnalyzer  $performance   = null,
         ?TechDebtAnalyzer     $techDebt      = null,
         ?StaticTestGenerator  $testGenerator = null,
+        ?DatabaseAnalyzer     $database      = null,
+        ?DartAnalyzer         $dart          = null,
     ) {
         $this->architecture  = $architecture  ?? new ArchitectureAnalyzer();
         $this->security      = $security      ?? new SecurityAnalyzer();
         $this->performance   = $performance   ?? new PerformanceAnalyzer();
         $this->techDebt      = $techDebt      ?? new TechDebtAnalyzer();
+        $this->database      = $database      ?? new DatabaseAnalyzer();
+        $this->dart          = $dart          ?? new DartAnalyzer();
         $this->testGenerator = $testGenerator ?? new StaticTestGenerator();
     }
 
@@ -70,20 +77,36 @@ class StaticOrchestrator
         $runSecurity     = $options['security']     ?? true;
         $runPerformance  = $options['performance']  ?? true;
         $runTechDebt     = $options['tech_debt']    ?? true;
+        $runDatabase     = $options['database']     ?? true;
+        // Dart analyzer auto-enables only when the scan contains *.dart files,
+        // so pure-Laravel runs never gain a noisy always-100 dimension.
+        $runDart         = $options['dart'] ?? $this->hasDartFiles($files);
 
-        // Run enabled analyzers and collect results, emitting progress events.
-        $agentResults = [];
-        if ($runArchitecture) {
-            $agentResults[] = $this->runAnalyzer($this->architecture, 'architect', $files, $onProgress);
-        }
-        if ($runSecurity) {
-            $agentResults[] = $this->runAnalyzer($this->security, 'security', $files, $onProgress);
-        }
-        if ($runPerformance) {
-            $agentResults[] = $this->runAnalyzer($this->performance, 'performance', $files, $onProgress);
-        }
-        if ($runTechDebt) {
-            $agentResults[] = $this->runAnalyzer($this->techDebt, 'tech_debt', $files, $onProgress);
+        // Build the ordered list of enabled analyzers.
+        $enabled = [];
+        if ($runArchitecture) { $enabled['architect']   = $this->architecture; }
+        if ($runSecurity)     { $enabled['security']     = $this->security; }
+        if ($runPerformance)  { $enabled['performance']  = $this->performance; }
+        if ($runTechDebt)     { $enabled['tech_debt']    = $this->techDebt; }
+        if ($runDatabase)     { $enabled['database']     = $this->database; }
+        if ($runDart)         { $enabled['dart']         = $this->dart; }
+
+        // Parallel path: when explicitly enabled AND there is no live-progress
+        // callback (progress events cannot cross a fork boundary), fan the
+        // analyzers out across processes. Falls back to sequential transparently.
+        $parallel = ($options['parallel'] ?? false) && $onProgress === null && ParallelRunner::available();
+
+        if ($parallel) {
+            $tasks = [];
+            foreach ($enabled as $stage => $analyzer) {
+                $tasks[$stage] = static fn() => $analyzer->analyze($files);
+            }
+            $agentResults = array_values(ParallelRunner::run($tasks, true));
+        } else {
+            $agentResults = [];
+            foreach ($enabled as $stage => $analyzer) {
+                $agentResults[] = $this->runAnalyzer($analyzer, $stage, $files, $onProgress);
+            }
         }
 
         // Flatten findings without repeated array_merge copies
@@ -104,6 +127,17 @@ class StaticOrchestrator
             'summary'       => $summary,
             'scan_path'     => $scanPath,
         ];
+    }
+
+    /** True when any scanned file is a Dart source file. */
+    private function hasDartFiles(array $files): bool
+    {
+        foreach (array_keys($files) as $path) {
+            if (str_ends_with((string) $path, '.dart')) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

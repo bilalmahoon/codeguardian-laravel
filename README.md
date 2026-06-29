@@ -594,6 +594,92 @@ php artisan codeguardian:analyze --since=origin/main    # only files changed sin
 
 Incremental mode intersects the scan with `git diff`, so CI reviews a PR in seconds instead of scanning thousands of files.
 
+### Parallel analysis (large codebases)
+
+```bash
+php artisan codeguardian:analyze --parallel       # fan analyzers out across CPU cores
+php artisan codeguardian:analyze --no-parallel    # force sequential (overrides config)
+```
+
+The built-in analyzers are independent, so they run in separate OS processes (requires the `pcntl` extension). Enable by default with `CODEGUARDIAN_PARALLEL=true`. Falls back to sequential automatically when `pcntl` is unavailable; the live progress UI always runs sequentially.
+
+### AI response cache (free re-runs)
+
+AI responses are cached on disk, keyed by a hash of the provider, model, and exact prompt. Re-running analysis/refactor over unchanged code is served from cache for **$0** — no repeated token spend. The model is part of the key, so switching models never returns a stale answer.
+
+```php
+// config/codeguardian.php
+'cache' => [
+    'ai_enabled' => true,   // CODEGUARDIAN_CACHE_AI
+    'ttl'        => 0,      // seconds (0 = never expires)
+],
+```
+
+### Quality gates / budgets (CI merge gate)
+
+Make `codeguardian:analyze` fail the build when code health regresses past an agreed budget:
+
+```php
+// config/codeguardian.php
+'gates' => [
+    'max_critical' => 0,
+    'max_high'     => 5,
+    'max_total'    => 200,
+    'max_risk'     => 60,   // risk score 0–100
+    'min_score'    => 70,   // overall score 0–100
+    'min_quality'  => 70,   // composite quality 0–100
+],
+```
+
+Any breach prints the violated budgets and exits non-zero. Gates are enforced automatically whenever configured (the `--gate` flag is accepted for explicitness).
+
+### Database & schema review
+
+The `database` analyzer reviews migrations and Eloquent models for the schema-level problems controllers can't reveal: irreversible migrations (no `down()`), unindexed foreign keys, money stored as `float`/`double`, hard-to-evolve `enum` columns, missing unique indexes on lookup columns, and fully unguarded models (`$guarded = []`). It runs as part of every analysis.
+
+### Flutter / Dart review
+
+`*.dart` files are reviewed automatically (the analyzer auto-enables when Dart files are present): `print()` in production, `setState()` inside `build()`, oversized `build()` methods, and using a `BuildContext` across an async gap (the `use_build_context_synchronously` crash).
+
+### Dependency vulnerability audit
+
+```bash
+php artisan codeguardian:audit                  # scan composer.lock for known CVEs + abandoned packages
+php artisan codeguardian:audit --fail-on=high   # fail CI on high+ advisories
+php artisan codeguardian:audit --format=sarif --output=build/
+```
+
+Uses the offline `composer audit` when available, falling back to the Packagist advisories API.
+
+### AI diff review (cheap PR review)
+
+```bash
+php artisan codeguardian:review                  # AI reviews only your uncommitted changes
+php artisan codeguardian:review --since=origin/main --output=review.md
+```
+
+Sends only the changed lines (a git diff) to the model for a focused, senior-engineer review — far cheaper than re-reviewing whole files. Falls back to a static scan when no AI key is set.
+
+### Module dependency graph
+
+```bash
+php artisan codeguardian:graph                       # text adjacency + circular-dependency report
+php artisan codeguardian:graph --format=mermaid      # paste into Markdown / docs
+php artisan codeguardian:graph --format=dot --output=graph.dot
+php artisan codeguardian:graph --fail-on-cycles      # gate CI on circular module deps
+```
+
+Maps module-to-module dependencies from `use` imports and flags circular dependencies — the smell that stops a modular codebase from being deployed module-by-module.
+
+### Watch mode (inner dev loop)
+
+```bash
+php artisan codeguardian:watch                   # re-analyze changed files on every save
+php artisan codeguardian:watch --path=app --interval=2 --agents=security,performance
+```
+
+Polls for file changes and runs a fast, scoped incremental analysis on each save.
+
 ### Tuning presets
 
 ```bash

@@ -84,6 +84,12 @@ return [
         // Maximum file size to include in context (bytes)
         'max_file_size' => 100_000,
 
+        // Run the built-in analyzers in parallel OS processes (requires the
+        // pcntl extension). Speeds up large codebases; falls back to sequential
+        // automatically when unavailable. Override per-run with --parallel /
+        // --no-parallel. The live progress UI always runs sequentially.
+        'parallel' => env('CODEGUARDIAN_PARALLEL', false),
+
         // Warn (and ask to confirm) if scan finds more files than this.
         // Set to 0 to disable the warning.
         'max_files_per_scan' => 2000,
@@ -214,6 +220,42 @@ return [
 
         // Inline suppression comment marker.
         'inline_marker' => 'codeguardian-ignore',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | AI Response Cache
+    |--------------------------------------------------------------------------
+    | Re-running analysis/refactor over unchanged code produces byte-identical
+    | prompts. Caching responses on disk serves those repeats for $0. The model
+    | is part of the cache key, so switching models never returns a stale answer.
+    */
+
+    'cache' => [
+        'ai_enabled' => env('CODEGUARDIAN_CACHE_AI', true),
+        // Seconds an entry stays valid (0 = never expires; clear manually).
+        'ttl'        => env('CODEGUARDIAN_CACHE_TTL', 0),
+        'dir'        => storage_path('codeguardian/cache/ai'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Quality Gates / Budgets
+    |--------------------------------------------------------------------------
+    | When set, `codeguardian:analyze` fails (non-zero exit) if any budget is
+    | breached — turning the tool into a real CI merge gate. Leave empty to
+    | disable. max_* are upper bounds; min_* are lower bounds.
+    |
+    |   'max_critical' => 0,    // no critical findings allowed
+    |   'max_high'     => 5,
+    |   'max_total'    => 200,
+    |   'max_risk'     => 60,   // risk score 0–100
+    |   'min_score'    => 70,   // overall score 0–100
+    |   'min_quality'  => 70,   // composite quality 0–100
+    */
+
+    'gates' => [
+        // 'max_critical' => 0,
     ],
 
     /*

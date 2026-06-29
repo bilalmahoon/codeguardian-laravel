@@ -12,11 +12,13 @@ class AiClient
 {
     private Client $http;
     private string $provider;
+    private ?AiResponseCache $cache = null;
 
     public function __construct()
     {
         $this->provider = config('codeguardian.provider', 'openai');
         $this->http     = new Client(['timeout' => 120]);
+        $this->cache    = AiResponseCache::fromConfig();
     }
 
     /**
@@ -61,11 +63,31 @@ class AiClient
     {
         $this->lastResponseTruncated = false;
 
-        return match ($this->provider) {
+        // Serve byte-identical requests from the on-disk cache for $0. The model
+        // is part of the key so changing models never returns a stale answer.
+        $cacheKey = null;
+        if ($this->cache !== null && $this->cache->enabled()) {
+            $model    = (string) (config("codeguardian.{$this->provider}.model") ?? '');
+            $cacheKey = AiResponseCache::key($this->provider, $model, $systemPrompt, $userPrompt, $maxTokens);
+            $hit      = $this->cache->get($cacheKey);
+            if ($hit !== null) {
+                return $hit;
+            }
+        }
+
+        $result = match ($this->provider) {
             'claude' => $this->callClaude($systemPrompt, $userPrompt, $maxTokens),
             'gemini' => $this->callGemini($systemPrompt, $userPrompt, $maxTokens),
             default  => $this->callOpenAi($systemPrompt, $userPrompt, $maxTokens),
         };
+
+        // Only cache complete, non-empty responses — never persist a truncated
+        // answer that the caller will reject.
+        if ($cacheKey !== null && ! $this->lastResponseTruncated && trim($result) !== '') {
+            $this->cache->put($cacheKey, $result);
+        }
+
+        return $result;
     }
 
     private function callOpenAi(string $system, string $user, ?int $maxTokens = null): string
