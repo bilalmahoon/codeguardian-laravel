@@ -25,6 +25,47 @@ A static code analysis package for Laravel projects. Runs directly in your exist
 
 ---
 
+## Premium CLI experience
+
+`analyze`, `security`, and `performance` render a **live, multi-stage pipeline** in the terminal instead of static logs — spinners, per-stage timers, an overall progress bar, **ETA**, the **file currently being analyzed**, and live counters, followed by an **execution-stats** card with a per-stage time breakdown.
+
+```
+  CodeGuardian · Static analysis · Security Analysis  █████████████░░░░░░░░░ 62%   elapsed 193ms · ETA 64ms
+  ├─ ✓ Architecture Analysis   45 findings · 56ms
+  ├─ ✓ Security Analysis       26 findings · 88ms
+  ├─ ⠹ Performance Analysis    12/17  PaymentService.php
+  └─ ○ Tech-Debt Analysis
+     files 17 · rule groups 4 · suggestions 71
+
+  ┌─ Execution stats ───────────────────────────────┐
+  │ ✓ Architecture Analysis  ██░░░░░░░░    56ms · 22%
+  │ ✓ Security Analysis      ████░░░░░░    88ms · 35%
+  │ ✓ Performance Analysis   ██░░░░░░░░    44ms · 17%
+  │ ✓ Tech-Debt Analysis     ██░░░░░░░░    59ms · 23%
+  ├─────────────────────────────────────────────────┤
+  │ Total 254ms · 17 files · 67/s throughput · 4 rules
+  └─────────────────────────────────────────────────┘
+```
+
+It's **TTY-aware**: when output isn't a terminal (CI, pipes, log files) it automatically degrades to clean one-line-per-stage logging. Force that anywhere with `--plain`:
+
+```bash
+php artisan codeguardian:analyze --plain      # CI-friendly plain logs
+```
+
+### Execution flow
+
+```
+Project Discovery → Scanning → ┌ Architecture ┐
+                               │ Security      │  (live per-file ticks)
+                               │ Performance   │
+                               └ Tech-Debt     ┘ → Risk Scoring → Report Generation
+```
+
+Progress is driven by **real** per-file/per-stage events emitted by the analysis engine — not simulated — so the percentage, ETA, and "current file" reflect actual work.
+
+---
+
 ## Web Dashboard
 
 Prefer a UI over the terminal? CodeGuardian ships a built-in dashboard. After installing the package, just open:
@@ -532,6 +573,31 @@ Design principles for new rules: **high confidence, low false positives**. When 
 | AI mode falls back to static | No/invalid API key, or the configured model returned 404. Check `CODEGUARDIAN_PROVIDER` and the matching key in `.env`. |
 | Dashboard returns 403 | It's local-only by default. Set `APP_ENV=local`, define a `viewCodeGuardian` gate, or set `CODEGUARDIAN_DASHBOARD_LOCAL_ONLY=false`. |
 | `env()` finding in app code | Intentional design rule — `env()` returns null after `config:cache`. Move the value into `config/*.php` and read it via `config()`. |
+
+---
+
+## FAQ
+
+**Does it need an API key?**
+No. The default `static` engine runs fully offline with zero cost. An API key only unlocks the optional `hybrid`/`ai` modes for natural-language, intent-aware review.
+
+**Will it modify my code during analysis?**
+No. `analyze`, `security`, and `performance` are strictly read-only. Only `refactor` writes — and it runs a test-first safety net with automatic rollback (`--safe`).
+
+**The live UI looks garbled in my CI logs.**
+CI isn't a TTY, so the tool auto-switches to plain logging. If a wrapper forces decoration, add `--plain`.
+
+**How do I reduce noise?**
+Use filters: `--min-severity=high`, `--confidence=high`, or `--category=`. Each finding also carries a `confidence` field you can triage by.
+
+**How do I run only part of the analysis?**
+`--agents=security,performance` (analyze), or call the dedicated `codeguardian:security` / `codeguardian:performance` commands.
+
+**Can I add my own rules?**
+Yes — see *Extending the engine* above. A rule is a small method on an analyzer plus a unit test.
+
+**Which Laravel/PHP versions are supported?**
+PHP ^8.1 and Laravel 9 / 10 / 11.
 
 ---
 

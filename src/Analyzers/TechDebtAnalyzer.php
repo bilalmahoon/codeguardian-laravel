@@ -11,13 +11,14 @@ class TechDebtAnalyzer extends BaseAnalyzer
         return 'tech_debt';
     }
 
-    public function analyze(array $files): array
+    public function analyze(array $files, ?callable $onFile = null): array
     {
         // Pre-build a global block-hash index once — O(n) — so per-file
         // duplication checks don't need to re-scan all files themselves.
         $globalBlockHashes = $this->buildBlockHashIndex($files);
 
         foreach ($files as $filePath => $content) {
+            $this->tick($onFile, $filePath);
             $this->checkLargeClass($filePath, $content);
             $this->checkComplexMethods($filePath, $content);
             $this->checkDuplicatedCode($filePath, $content, $globalBlockHashes);

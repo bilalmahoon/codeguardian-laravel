@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CodeGuardian\Laravel\Commands;
 
 use CodeGuardian\Laravel\Analyzers\StaticOrchestrator;
+use CodeGuardian\Laravel\Console\ConsoleReporter;
 use CodeGuardian\Laravel\PackageOrchestrator;
 use CodeGuardian\Laravel\Support\AiClient;
 use CodeGuardian\Laravel\Support\CodeScanner;
@@ -31,6 +32,7 @@ class AnalyzeCommand extends Command
                             {--confidence=   : Filter findings by confidence (csv): high,medium,low}
                             {--owasp=        : Filter findings by OWASP tag substring (csv), e.g. A03,A01}
                             {--cwe=          : Filter findings by CWE id substring (csv), e.g. CWE-89}
+                            {--plain     : Disable the live progress UI (plain log output, ideal for CI)}
                             {--no-report : Print findings to console only, no files saved}';
 
     protected $description = 'Run a full CodeGuardian analysis — Principal SE + Senior DevOps + Senior QA level review';
@@ -92,11 +94,15 @@ class AnalyzeCommand extends Command
         }
         $this->newLine();
 
-        // Run analysis based on mode
+        // Run analysis based on mode. The static path gets the premium live
+        // pipeline UI unless --plain is set (or output isn't a TTY → auto-plain).
+        $useLiveUi = ($mode === 'static') && ! $this->option('plain');
         $results = match ($mode) {
             'ai'     => $this->runAiAnalysis($context),
             'hybrid' => $this->runHybridAnalysis($context, $path),
-            default  => $this->runStaticAnalysis($context['files'] ?? [], $path),
+            default  => $useLiveUi
+                ? $this->runStaticAnalysisLive($context['files'] ?? [], $path)
+                : $this->runStaticAnalysis($context['files'] ?? [], $path),
         };
 
         if ($results === null) {
@@ -206,6 +212,66 @@ class AnalyzeCommand extends Command
         $result = $orchestrator->analyze($files, $options, $scanPath);
 
         return $this->normalizeStaticResult($result, $scanPath);
+    }
+
+    /**
+     * Premium variant of static analysis: drives a live, multi-stage pipeline
+     * (spinners, timers, %/ETA, current file, live counters) from the
+     * orchestrator's real per-file/per-stage progress events.
+     */
+    private function runStaticAnalysisLive(array $files, string $scanPath): ?array
+    {
+        $requestedAgents = $this->resolveRequestedAgents();
+        $options = [
+            'architecture' => empty($requestedAgents) || in_array('architect', $requestedAgents),
+            'security'     => empty($requestedAgents) || in_array('security', $requestedAgents),
+            'performance'  => empty($requestedAgents) || in_array('performance', $requestedAgents),
+            'tech_debt'    => empty($requestedAgents) || in_array('tech_debt', $requestedAgents),
+        ];
+
+        $stageLabels = [
+            'architecture' => 'Architecture Analysis',
+            'security'     => 'Security Analysis',
+            'performance'  => 'Performance Analysis',
+            'tech_debt'    => 'Tech-Debt Analysis',
+        ];
+
+        $stages = [];
+        foreach (array_keys(array_filter($options)) as $key) {
+            $stages[] = ['key' => $key, 'label' => $stageLabels[$key] ?? ucfirst($key)];
+        }
+
+        $reporter = new ConsoleReporter($this->output, $stages, 'CodeGuardian · Static analysis');
+        $reporter->setCount('files_total', count($files));
+        $reporter->setCount('rules', count($stages));
+
+        // orchestrator emits 'architect' for the architecture analyzer.
+        $stageMap   = ['architect' => 'architecture', 'security' => 'security', 'performance' => 'performance', 'tech_debt' => 'tech_debt'];
+        $fileCount  = count($files);
+        $onProgress = function (string $event, array $data) use ($reporter, $stageMap, $fileCount): void {
+            $stage = $stageMap[$data['stage']] ?? $data['stage'];
+            match ($event) {
+                'stage_start' => $reporter->start($stage, $fileCount),
+                'file'        => $reporter->advance($stage, $data['file'] ?? null),
+                'stage_end'   => $this->finishStage($reporter, $stage, (int) ($data['findings'] ?? 0)),
+                default       => null,
+            };
+        };
+
+        $orchestrator = new StaticOrchestrator();
+        $raw = $orchestrator->analyze($files, $options, $scanPath, $onProgress);
+
+        $reporter->done();
+        $reporter->executionStats();
+        $this->newLine();
+
+        return $this->normalizeStaticResult($raw, $scanPath);
+    }
+
+    private function finishStage(ConsoleReporter $reporter, string $stage, int $findings): void
+    {
+        $reporter->count('suggestions', $findings);
+        $reporter->finish($stage, $findings . ' finding' . ($findings === 1 ? '' : 's'));
     }
 
     // ──────────────────────────────────────────────────────────────────────────

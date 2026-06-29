@@ -64,26 +64,26 @@ class StaticOrchestrator
      *   scan_path: string
      * }
      */
-    public function analyze(array $files, array $options = [], string $scanPath = ''): array
+    public function analyze(array $files, array $options = [], string $scanPath = '', ?callable $onProgress = null): array
     {
         $runArchitecture = $options['architecture'] ?? true;
         $runSecurity     = $options['security']     ?? true;
         $runPerformance  = $options['performance']  ?? true;
         $runTechDebt     = $options['tech_debt']    ?? true;
 
-        // Run enabled analyzers and collect results
+        // Run enabled analyzers and collect results, emitting progress events.
         $agentResults = [];
         if ($runArchitecture) {
-            $agentResults[] = $this->architecture->analyze($files);
+            $agentResults[] = $this->runAnalyzer($this->architecture, 'architect', $files, $onProgress);
         }
         if ($runSecurity) {
-            $agentResults[] = $this->security->analyze($files);
+            $agentResults[] = $this->runAnalyzer($this->security, 'security', $files, $onProgress);
         }
         if ($runPerformance) {
-            $agentResults[] = $this->performance->analyze($files);
+            $agentResults[] = $this->runAnalyzer($this->performance, 'performance', $files, $onProgress);
         }
         if ($runTechDebt) {
-            $agentResults[] = $this->techDebt->analyze($files);
+            $agentResults[] = $this->runAnalyzer($this->techDebt, 'tech_debt', $files, $onProgress);
         }
 
         // Flatten findings without repeated array_merge copies
@@ -104,6 +104,34 @@ class StaticOrchestrator
             'summary'       => $summary,
             'scan_path'     => $scanPath,
         ];
+    }
+
+    /**
+     * Run a single analyzer, forwarding per-file ticks and emitting
+     * stage_start / stage_end progress events with timing + finding count.
+     */
+    private function runAnalyzer(BaseAnalyzer $analyzer, string $stage, array $files, ?callable $onProgress): array
+    {
+        if ($onProgress !== null) {
+            $onProgress('stage_start', ['stage' => $stage]);
+        }
+
+        $started = microtime(true);
+        $onFile  = $onProgress === null
+            ? null
+            : static fn(string $file) => $onProgress('file', ['stage' => $stage, 'file' => $file]);
+
+        $result = $analyzer->analyze($files, $onFile);
+
+        if ($onProgress !== null) {
+            $onProgress('stage_end', [
+                'stage'      => $stage,
+                'findings'   => count($result['findings'] ?? []),
+                'elapsed_ms' => (int) round((microtime(true) - $started) * 1000),
+            ]);
+        }
+
+        return $result;
     }
 
     // ──────────────────────────────────────────────────────────────────────────

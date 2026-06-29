@@ -13,7 +13,19 @@ abstract class BaseAnalyzer
 
     abstract public function getName(): string;
 
-    abstract public function analyze(array $files): array;
+    /**
+     * @param array<string,string> $files     [path => content]
+     * @param callable|null        $onFile    optional per-file progress hook: fn(string $path): void
+     */
+    abstract public function analyze(array $files, ?callable $onFile = null): array;
+
+    /** Safely invoke a per-file progress callback (no-op when null). */
+    protected function tick(?callable $onFile, string $filePath): void
+    {
+        if ($onFile !== null) {
+            $onFile($filePath);
+        }
+    }
 
     // ──────────────────────────────────────────────────────────────────────────
     // Parsing

@@ -11,9 +11,10 @@ class PerformanceAnalyzer extends BaseAnalyzer
         return 'performance';
     }
 
-    public function analyze(array $files): array
+    public function analyze(array $files, ?callable $onFile = null): array
     {
         foreach ($files as $filePath => $content) {
+            $this->tick($onFile, $filePath);
             $this->checkNPlusOne($filePath, $content);
             $this->checkMissingEagerLoading($filePath, $content);
             $this->checkSelectAll($filePath, $content);

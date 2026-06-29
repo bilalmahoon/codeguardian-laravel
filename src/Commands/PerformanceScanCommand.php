@@ -6,6 +6,7 @@ namespace CodeGuardian\Laravel\Commands;
 
 use CodeGuardian\Laravel\Analyzers\PerformanceAnalyzer;
 use CodeGuardian\Laravel\Agents\PerformanceAgent;
+use CodeGuardian\Laravel\Console\ConsoleReporter;
 use CodeGuardian\Laravel\Support\AiClient;
 use CodeGuardian\Laravel\Support\CodeScanner;
 use CodeGuardian\Laravel\Support\FindingFilter;
@@ -22,7 +23,8 @@ class PerformanceScanCommand extends Command
                             {--severity=     : Filter findings by severity (csv): critical,high,medium,low}
                             {--min-severity= : Keep only findings at or above this severity}
                             {--category=     : Filter findings by category substring (csv)}
-                            {--confidence=   : Filter findings by confidence (csv): high,medium,low}';
+                            {--confidence=   : Filter findings by confidence (csv): high,medium,low}
+                            {--plain         : Disable the live progress UI (plain log output, ideal for CI)}';
 
     protected $description = 'Senior Performance Engineer review — N+1, missing indexes, cache, memory leaks — with Claude AI when key is configured';
 
@@ -56,7 +58,9 @@ class PerformanceScanCommand extends Command
         [$findings, $score, $biggestWin] = match ($mode) {
             'hybrid' => $this->runHybridPerformance($files, $context),
             'ai'     => $this->runAiPerformance($context),
-            default  => $this->runStaticPerformance($files),
+            default  => $this->option('plain')
+                ? $this->runStaticPerformance($files)
+                : $this->runStaticPerformanceLive($files),
         };
 
         // Optional, combinable finding filters
@@ -185,6 +189,30 @@ class PerformanceScanCommand extends Command
         $result   = $analyzer->analyze($files);
 
         return [$result['findings'] ?? [], $result['performance_score'] ?? 0, null];
+    }
+
+    /** Static performance scan with the premium live pipeline UI. */
+    private function runStaticPerformanceLive(array $files): array
+    {
+        $reporter = new ConsoleReporter(
+            $this->output,
+            [['key' => 'performance', 'label' => 'Performance Analysis']],
+            'CodeGuardian · Performance review'
+        );
+        $reporter->setCount('files_total', count($files));
+        $reporter->setCount('rules', 1);
+
+        $reporter->start('performance', count($files));
+        $analyzer = new PerformanceAnalyzer();
+        $result   = $analyzer->analyze($files, fn(string $f) => $reporter->advance('performance', $f));
+        $findings = $result['findings'] ?? [];
+        $reporter->finish('performance', count($findings) . ' finding' . (count($findings) === 1 ? '' : 's'));
+
+        $reporter->done();
+        $reporter->executionStats();
+        $this->newLine();
+
+        return [$findings, $result['performance_score'] ?? 0, null];
     }
 
     /** @return array{0: array, 1: int, 2: string|null} */

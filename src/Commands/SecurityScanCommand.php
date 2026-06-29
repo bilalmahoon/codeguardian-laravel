@@ -6,6 +6,7 @@ namespace CodeGuardian\Laravel\Commands;
 
 use CodeGuardian\Laravel\Analyzers\SecurityAnalyzer;
 use CodeGuardian\Laravel\Agents\SecurityAgent;
+use CodeGuardian\Laravel\Console\ConsoleReporter;
 use CodeGuardian\Laravel\Support\AiClient;
 use CodeGuardian\Laravel\Support\CodeScanner;
 use CodeGuardian\Laravel\Support\FindingFilter;
@@ -26,6 +27,7 @@ class SecurityScanCommand extends Command
                             {--confidence=   : Filter findings by confidence (csv): high,medium,low}
                             {--owasp=        : Filter findings by OWASP tag substring (csv), e.g. A03,A01}
                             {--cwe=          : Filter findings by CWE id substring (csv), e.g. CWE-89}
+                            {--plain         : Disable the live progress UI (plain log output, ideal for CI)}
                             {--fail-on=critical : Exit with error if issues found at this level: critical, high, medium}';
 
     protected $description = 'Senior DevOps security audit — SQL injection, XSS, IDOR, broken auth, secrets — with Claude AI when key is configured';
@@ -62,7 +64,9 @@ class SecurityScanCommand extends Command
         [$findings, $score, $aiSummary] = match ($mode) {
             'hybrid' => $this->runHybridSecurity($files, $context),
             'ai'     => $this->runAiSecurity($context),
-            default  => $this->runStaticSecurity($files),
+            default  => $this->option('plain')
+                ? $this->runStaticSecurity($files)
+                : $this->runStaticSecurityLive($files),
         };
 
         // Optional, combinable finding filters
@@ -212,6 +216,30 @@ class SecurityScanCommand extends Command
         $result   = $analyzer->analyze($files);
 
         return [$result['findings'] ?? [], $result['security_score'] ?? 0, null];
+    }
+
+    /** Static security scan with the premium live pipeline UI. */
+    private function runStaticSecurityLive(array $files): array
+    {
+        $reporter = new ConsoleReporter(
+            $this->output,
+            [['key' => 'security', 'label' => 'Security Analysis']],
+            'CodeGuardian · Security audit'
+        );
+        $reporter->setCount('files_total', count($files));
+        $reporter->setCount('rules', 1);
+
+        $reporter->start('security', count($files));
+        $analyzer = new SecurityAnalyzer();
+        $result   = $analyzer->analyze($files, fn(string $f) => $reporter->advance('security', $f));
+        $findings = $result['findings'] ?? [];
+        $reporter->finish('security', count($findings) . ' finding' . (count($findings) === 1 ? '' : 's'));
+
+        $reporter->done();
+        $reporter->executionStats();
+        $this->newLine();
+
+        return [$findings, $result['security_score'] ?? 0, null];
     }
 
     /** @return array{0: array, 1: int, 2: string|null} */

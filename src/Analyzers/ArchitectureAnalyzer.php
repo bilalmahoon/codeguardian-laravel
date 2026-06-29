@@ -25,9 +25,10 @@ class ArchitectureAnalyzer extends BaseAnalyzer
         return 'architect';
     }
 
-    public function analyze(array $files): array
+    public function analyze(array $files, ?callable $onFile = null): array
     {
         foreach ($files as $filePath => $content) {
+            $this->tick($onFile, $filePath);
             $this->analyzeFile($filePath, $content);
         }
 

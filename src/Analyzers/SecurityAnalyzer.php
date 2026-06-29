@@ -11,9 +11,10 @@ class SecurityAnalyzer extends BaseAnalyzer
         return 'security';
     }
 
-    public function analyze(array $files): array
+    public function analyze(array $files, ?callable $onFile = null): array
     {
         foreach ($files as $filePath => $content) {
+            $this->tick($onFile, $filePath);
             $this->checkSqlInjection($filePath, $content);
             $this->checkHardcodedSecrets($filePath, $content);
             $this->checkMissingAuthorization($filePath, $content);
