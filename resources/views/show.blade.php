@@ -65,6 +65,88 @@
         @endif
     </div>
 
+    @if(!empty($findings))
+        <div class="card">
+            <div class="inline" style="margin-bottom: 6px;">
+                <h2 style="margin:0;">Findings explorer</h2>
+                <div class="grow"></div>
+                <span class="muted">{{ $severity['total'] ?? count($findings) }} total</span>
+            </div>
+
+            <div class="fbar" id="sev-filter">
+                <button type="button" class="fbtn active" data-sev="all">All ({{ $severity['total'] ?? count($findings) }})</button>
+                <button type="button" class="fbtn" data-sev="critical">🔴 Critical ({{ $severity['critical'] ?? 0 }})</button>
+                <button type="button" class="fbtn" data-sev="high">🟠 High ({{ $severity['high'] ?? 0 }})</button>
+                <button type="button" class="fbtn" data-sev="medium">🟡 Medium ({{ $severity['medium'] ?? 0 }})</button>
+                <button type="button" class="fbtn" data-sev="low">🟢 Low ({{ $severity['low'] ?? 0 }})</button>
+            </div>
+
+            <input type="text" id="finding-search" placeholder="Filter by title, file, or category…" style="margin-bottom:14px;">
+
+            <div id="findings-list">
+                @php
+                    $sorted = $findings;
+                    usort($sorted, fn($a, $b) =>
+                        (\CodeGuardian\Laravel\Analyzers\Severity::ORDER[\CodeGuardian\Laravel\Analyzers\Severity::clamp($a['severity'] ?? 'low')] ?? 4)
+                        <=> (\CodeGuardian\Laravel\Analyzers\Severity::ORDER[\CodeGuardian\Laravel\Analyzers\Severity::clamp($b['severity'] ?? 'low')] ?? 4)
+                    );
+                @endphp
+                @foreach($sorted as $f)
+                    @php
+                        $sev = \CodeGuardian\Laravel\Analyzers\Severity::clamp($f['severity'] ?? 'low');
+                        $loc = ($f['file'] ?? '') . (!empty($f['line_start']) ? ':'.$f['line_start'] : '');
+                        $hay = strtolower(($f['title'] ?? '').' '.($f['file'] ?? '').' '.($f['category'] ?? ''));
+                    @endphp
+                    <div class="finding" data-sev="{{ $sev }}" data-hay="{{ $hay }}">
+                        <div class="inline">
+                            <span class="sevtag {{ $sev }}">{{ strtoupper($sev) }}</span>
+                            <span class="ttl">{{ $f['title'] ?? 'Issue' }}</span>
+                            <div class="grow"></div>
+                            <span class="pill type">{{ $f['category'] ?? '' }}</span>
+                        </div>
+                        @if($loc)<div class="loc">{{ $loc }}</div>@endif
+                        @if(!empty($f['description']))<div class="desc">{{ \Illuminate\Support\Str::limit($f['description'], 240) }}</div>@endif
+                        @if(!empty($f['recommendation']))<div class="desc">💡 {{ \Illuminate\Support\Str::limit($f['recommendation'], 200) }}</div>@endif
+                    </div>
+                @endforeach
+            </div>
+            <div class="empty" id="findings-empty" style="display:none;">No findings match your filter.</div>
+        </div>
+
+        <script>
+            (function () {
+                const buttons = document.querySelectorAll('#sev-filter .fbtn');
+                const search  = document.getElementById('finding-search');
+                const items   = Array.from(document.querySelectorAll('#findings-list .finding'));
+                const empty   = document.getElementById('findings-empty');
+                let sev = 'all';
+
+                function apply() {
+                    const q = (search.value || '').toLowerCase().trim();
+                    let shown = 0;
+                    items.forEach(function (el) {
+                        const okSev = sev === 'all' || el.dataset.sev === sev;
+                        const okQ   = q === '' || (el.dataset.hay || '').indexOf(q) !== -1;
+                        const show  = okSev && okQ;
+                        el.style.display = show ? '' : 'none';
+                        if (show) shown++;
+                    });
+                    empty.style.display = shown === 0 ? '' : 'none';
+                }
+
+                buttons.forEach(function (b) {
+                    b.addEventListener('click', function () {
+                        buttons.forEach(x => x.classList.remove('active'));
+                        b.classList.add('active');
+                        sev = b.dataset.sev;
+                        apply();
+                    });
+                });
+                search.addEventListener('input', apply);
+            })();
+        </script>
+    @endif
+
     <form method="POST" action="{{ route('codeguardian.destroy', ['id' => $run['id']]) }}"
           onsubmit="return confirm('Delete this run from history?');" style="margin-top: 18px;">
         @csrf

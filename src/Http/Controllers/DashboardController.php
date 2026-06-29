@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace CodeGuardian\Laravel\Http\Controllers;
 
+use CodeGuardian\Laravel\Support\DashboardInsights;
+use CodeGuardian\Laravel\Support\HistoryStore;
 use CodeGuardian\Laravel\Support\ProjectMetadata;
 use CodeGuardian\Laravel\Support\RunStore;
 use Illuminate\Http\JsonResponse;
@@ -80,9 +82,46 @@ class DashboardController
 
     public function index(): Response
     {
+        $history = HistoryStore::fromConfig()->recent(30);
+
         return response()->view('codeguardian::index', [
             'runs'    => $this->runs->all(),
             'aiReady' => $this->aiStatus(),
+            'trend'   => DashboardInsights::fromHistory($history),
+        ]);
+    }
+
+    /**
+     * Insights: code-health trends over time + the latest run's category,
+     * severity, quality, and hotspot breakdown.
+     */
+    public function insights(): Response
+    {
+        $history = HistoryStore::fromConfig()->recent(60);
+        $trend   = DashboardInsights::fromHistory($history);
+
+        // Latest analyze run's JSON report powers the breakdown panels.
+        $report = null;
+        foreach ($this->runs->all() as $run) {
+            if (($run['type'] ?? null) === 'analyze' && ($run['status'] ?? null) === 'completed') {
+                $report = $this->runs->reportData($run);
+                if ($report !== null) {
+                    break;
+                }
+            }
+        }
+
+        $findings = is_array($report['all_findings'] ?? null) ? $report['all_findings'] : [];
+
+        return response()->view('codeguardian::insights', [
+            'aiReady'    => $this->aiStatus(),
+            'trend'      => $trend,
+            'scoreSpark' => DashboardInsights::sparkline(array_column($trend['points'], 'score'), 600, 120, '#3fb950'),
+            'riskSpark'  => DashboardInsights::sparkline(array_column($trend['points'], 'risk'), 600, 120, '#f85149'),
+            'categories' => DashboardInsights::categoryBreakdown($findings),
+            'severity'   => DashboardInsights::severityBreakdown($findings),
+            'report'     => $report,
+            'hotspots'   => is_array($report['summary']['hotspot_files'] ?? null) ? $report['summary']['hotspot_files'] : [],
         ]);
     }
 
@@ -152,10 +191,17 @@ class DashboardController
             abort(404);
         }
 
+        $report   = ($run['type'] ?? null) === 'analyze' ? $this->runs->reportData($run) : null;
+        $findings = is_array($report['all_findings'] ?? null) ? $report['all_findings'] : [];
+
         return response()->view('codeguardian::show', [
-            'run'     => $run,
-            'reports' => $this->runs->reportsFor($run),
-            'files'   => ($run['type'] ?? null) === 'analyze' ? $this->runs->reportFiles($run) : [],
+            'run'        => $run,
+            'reports'    => $this->runs->reportsFor($run),
+            'files'      => ($run['type'] ?? null) === 'analyze' ? $this->runs->reportFiles($run) : [],
+            'report'     => $report,
+            'findings'   => $findings,
+            'severity'   => DashboardInsights::severityBreakdown($findings),
+            'categories' => DashboardInsights::categoryBreakdown($findings),
         ]);
     }
 

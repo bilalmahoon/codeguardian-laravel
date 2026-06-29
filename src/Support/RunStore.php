@@ -270,6 +270,28 @@ class RunStore
         return [];
     }
 
+    /**
+     * Decode a run's JSON report (summary, findings, quality, scores) for the
+     * dashboard findings explorer. Returns null when no JSON report exists.
+     *
+     * @param  array<string,mixed> $meta
+     * @return array<string,mixed>|null
+     */
+    public function reportData(array $meta): ?array
+    {
+        foreach ($this->reportsFor($meta) as $report) {
+            if ($report['ext'] !== 'json') {
+                continue;
+            }
+            $data = json_decode((string) @file_get_contents($report['path']), true);
+            if (is_array($data)) {
+                return $data;
+            }
+        }
+
+        return null;
+    }
+
     public function reportHtml(string $id): ?string
     {
         $meta = $this->readMeta($id);

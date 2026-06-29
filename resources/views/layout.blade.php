@@ -61,12 +61,48 @@
         .inline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
         .mono { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
         .check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+        .navlink { color: var(--muted); font-size: 14px; font-weight: 600; }
+        .navlink:hover { color: var(--text); text-decoration: none; }
+        /* Insights / explorer components */
+        .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+        @media (max-width: 720px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+        .stat { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+        .stat .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+        .stat .v { font-size: 26px; font-weight: 700; margin-top: 6px; }
+        .stat .v.good { color: var(--green); } .stat .v.warn { color: var(--amber); } .stat .v.bad { color: var(--red); }
+        .delta { font-size: 12px; font-weight: 600; }
+        .delta.up { color: var(--green); } .delta.down { color: var(--red); } .delta.flat { color: var(--muted); }
+        .chart { background: #05070b; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+        .chart .lbls { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: 4px; }
+        .bar { height: 10px; background: var(--panel-2); border-radius: 999px; overflow: hidden; }
+        .bar > span { display: block; height: 100%; border-radius: 999px; }
+        .sev-crit { background: var(--red); } .sev-high { background: #ff7b3d; }
+        .sev-med { background: var(--amber); } .sev-low { background: var(--green); }
+        .catrow { display: grid; grid-template-columns: 180px 1fr 48px; gap: 12px; align-items: center; padding: 7px 0; }
+        .catrow .nm { font-size: 13px; }
+        .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+        .sevtag { display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+        .sevtag.critical { background: #f8514922; color: #ff9a93; }
+        .sevtag.high { background: #ff7b3d22; color: #ffb38a; }
+        .sevtag.medium { background: #d2992222; color: #f3d27a; }
+        .sevtag.low { background: #3fb95022; color: #9ff0a9; }
+        .fbar { display:flex; gap: 6px; flex-wrap: wrap; margin: 12px 0; }
+        .fbtn { cursor: pointer; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+            border-radius: 8px; padding: 6px 12px; font-size: 13px; font-weight: 600; }
+        .fbtn.active { border-color: var(--accent); color: var(--accent); }
+        .finding { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; background: var(--panel-2); }
+        .finding .ttl { font-size: 14px; font-weight: 600; }
+        .finding .loc { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 4px; }
+        .finding .desc { font-size: 13px; color: var(--muted); margin-top: 8px; }
+        .qbar { display: grid; grid-template-columns: 140px 1fr 60px; gap: 12px; align-items: center; padding: 6px 0; font-size: 13px; }
     </style>
 </head>
 <body>
     <header class="top">
         <div class="wrap">
             <a href="{{ route('codeguardian.index') }}" class="brand"><span>◆ CodeGuardian</span></a>
+            <a href="{{ route('codeguardian.index') }}" class="navlink">History</a>
+            <a href="{{ route('codeguardian.insights') }}" class="navlink">Insights</a>
             <div class="grow"></div>
             @if(!empty($aiReady))
                 <span class="mono">

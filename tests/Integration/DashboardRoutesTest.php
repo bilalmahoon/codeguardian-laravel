@@ -42,6 +42,15 @@ class DashboardRoutesTest extends TestCase
     }
 
     /** @test */
+    public function test_insights_page_renders(): void
+    {
+        $this->get('/codeguardian/insights')
+            ->assertOk()
+            ->assertSee('Insights')
+            ->assertSee('No data yet'); // empty state when no history/reports
+    }
+
+    /** @test */
     public function test_new_run_page_renders_with_operations(): void
     {
         $this->get('/codeguardian/new')

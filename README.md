@@ -256,7 +256,9 @@ From there you can:
 
 - **Run everything from the browser** — analyze, security audit, performance review, generate tests, and refactor. Pick the target from **searchable dropdowns** (module list, API routes, web routes, artisan commands) instead of typing it by hand.
 - **Watch live progress** — each run executes in the background and streams its console output to the page in real time.
-- **Browse full history** — every past run is listed with its type, target, status, and a link to open its saved HTML/JSON report.
+- **Browse full history** — every past run is listed with its type, target, status, and a link to open its saved HTML/JSON report. The history page also shows a **project-health snapshot** (score, risk, open issues, trend) at a glance.
+- **Explore findings interactively** — a completed analyze run gets a **Findings explorer**: filter by severity, search by title/file/category, and see each issue with its location and recommendation — no need to open the raw JSON.
+- **Track trends on the Insights page** (`/codeguardian/insights`) — quality-score and risk **trend charts** over time, severity and **top-category breakdowns**, **quality dimensions**, and **hotspot files**, all built from your run history and latest report.
 
 ### Security
 
