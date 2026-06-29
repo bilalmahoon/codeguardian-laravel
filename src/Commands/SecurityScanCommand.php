@@ -8,7 +8,9 @@ use CodeGuardian\Laravel\Analyzers\SecurityAnalyzer;
 use CodeGuardian\Laravel\Agents\SecurityAgent;
 use CodeGuardian\Laravel\Support\AiClient;
 use CodeGuardian\Laravel\Support\CodeScanner;
+use CodeGuardian\Laravel\Support\FindingFilter;
 use CodeGuardian\Laravel\Support\ReportFormatter;
+use CodeGuardian\Laravel\Support\RiskScorer;
 use Illuminate\Console\Command;
 
 class SecurityScanCommand extends Command
@@ -18,6 +20,12 @@ class SecurityScanCommand extends Command
                             {--type=   : Project type: laravel or flutter}
                             {--output= : Save report to this directory}
                             {--mode=   : Engine mode: static | hybrid | ai (auto-detected when API key present)}
+                            {--severity=     : Filter findings by severity (csv): critical,high,medium,low}
+                            {--min-severity= : Keep only findings at or above this severity}
+                            {--category=     : Filter findings by category substring (csv)}
+                            {--confidence=   : Filter findings by confidence (csv): high,medium,low}
+                            {--owasp=        : Filter findings by OWASP tag substring (csv), e.g. A03,A01}
+                            {--cwe=          : Filter findings by CWE id substring (csv), e.g. CWE-89}
                             {--fail-on=critical : Exit with error if issues found at this level: critical, high, medium}';
 
     protected $description = 'Senior DevOps security audit — SQL injection, XSS, IDOR, broken auth, secrets — with Claude AI when key is configured';
@@ -56,6 +64,21 @@ class SecurityScanCommand extends Command
             'ai'     => $this->runAiSecurity($context),
             default  => $this->runStaticSecurity($files),
         };
+
+        // Optional, combinable finding filters
+        $filterSpec = FindingFilter::fromOptions([
+            'severity'     => $this->option('severity'),
+            'min-severity' => $this->option('min-severity'),
+            'category'     => $this->option('category'),
+            'confidence'   => $this->option('confidence'),
+            'owasp'        => $this->option('owasp'),
+            'cwe'          => $this->option('cwe'),
+        ]);
+        if (! FindingFilter::isEmpty($filterSpec)) {
+            $findings = FindingFilter::apply($findings, $filterSpec);
+            $this->line('  🔎 Filters applied — ' . count($findings) . ' finding(s) match.');
+            $this->newLine();
+        }
 
         // Print results
         $this->info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -101,8 +124,16 @@ class SecurityScanCommand extends Command
                 if (! empty($f['exploit_scenario'])) {
                     $this->warn("         Exploit: {$f['exploit_scenario']}");
                 }
-                if (! empty($f['owasp_reference'])) {
-                    $this->line("         OWASP: {$f['owasp_reference']}");
+                $taxonomy = array_filter([
+                    ! empty($f['owasp']) ? "OWASP {$f['owasp']}" : ($f['owasp_reference'] ?? null),
+                    ! empty($f['cwe']) ? $f['cwe'] : null,
+                    ! empty($f['confidence']) ? "confidence: {$f['confidence']}" : null,
+                ]);
+                if (! empty($taxonomy)) {
+                    $this->line('         ' . implode('  ·  ', $taxonomy));
+                }
+                if (! empty($f['impact'])) {
+                    $this->line("         Impact: {$f['impact']}");
                 }
                 if (! empty($f['recommendation'])) {
                     $this->line("         Fix: {$f['recommendation']}");

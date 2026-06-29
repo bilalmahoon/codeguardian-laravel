@@ -60,8 +60,78 @@ class ArchitectureAnalyzer extends BaseAnalyzer
             $this->reportFatModel($filePath, $content, $lines);
         }
 
+        if ($this->isModel($filePath, $content)) {
+            $this->checkBusinessLogicInModel($filePath, $content);
+        }
+
         $this->checkLongMethods($filePath, $content);
         $this->checkStaticFacadeOveruse($filePath, $content);
+        $this->checkEnvOutsideConfig($filePath, $content);
+    }
+
+    /** Side-effecting integrations (HTTP/Mail/Queue) do not belong in a Model. */
+    private function checkBusinessLogicInModel(string $filePath, string $content): void
+    {
+        if (! preg_match('/\b(Http|Mail|Notification|Bus|Queue)\s*::/', $content)) {
+            return;
+        }
+
+        $this->addResult(AnalysisResult::make(
+            category:       'fat_model',
+            severity:       Severity::MEDIUM,
+            title:          "Business/integration logic in model {$this->className($filePath)}",
+            description:    "Model {$this->className($filePath)} performs side-effecting work (HTTP, Mail, Queue, Notifications). Models should hold persistence concerns (relations, casts, scopes), not orchestration.",
+            file:           $filePath,
+            recommendation: 'Move integration/orchestration into a Service or Action class; keep the model thin.',
+            confidence:     'medium',
+            impact:         'Improves testability and keeps the domain model focused.',
+            effort:         'medium',
+            breakingRisk:   'medium',
+            rootCause:      'Orchestration logic placed on the persistence model.',
+            principle:      'SOLID: Single Responsibility',
+        ));
+    }
+
+    /**
+     * env() outside config/ returns null once `config:cache` runs in production.
+     * This is one of the most common and most damaging Laravel misconfigurations.
+     */
+    private function checkEnvOutsideConfig(string $filePath, string $content): void
+    {
+        // config/*.php is the only place env() is safe.
+        if (preg_match('#/config/#', $filePath) || str_starts_with(basename(dirname($filePath)), 'config')) {
+            return;
+        }
+
+        $lines = explode("\n", $content);
+        foreach ($lines as $lineNum => $line) {
+            $trimmed = ltrim($line);
+            if (str_starts_with($trimmed, '//') || str_starts_with($trimmed, '*') || str_starts_with($trimmed, '#')) {
+                continue;
+            }
+            if (preg_match('/(?<![\w>])env\s*\(/', $line)) {
+                $this->addResult(AnalysisResult::make(
+                    category:       'config_misuse',
+                    severity:       Severity::MEDIUM,
+                    title:          "env() called outside config/ in {$this->className($filePath)}",
+                    description:    'Line ' . ($lineNum + 1) . ": env() is used outside a config file. After `php artisan config:cache` (standard in production) env() returns null here, causing subtle, hard-to-trace failures.",
+                    file:           $filePath,
+                    lineStart:      $lineNum + 1,
+                    lineEnd:        $lineNum + 1,
+                    codeSnippet:    trim($line),
+                    recommendation: 'Read the value through config(\'...\') and define it once in a config/*.php file that calls env().',
+                    codeBefore:     "\$key = env('STRIPE_KEY');",
+                    codeAfter:      "// config/services.php: 'stripe' => ['key' => env('STRIPE_KEY')]\n\$key = config('services.stripe.key');",
+                    confidence:     'high',
+                    impact:         'Prevents null-config outages when configuration is cached.',
+                    effort:         'small',
+                    breakingRisk:   'low',
+                    rootCause:      'Direct env() access bypasses the cached config layer.',
+                    principle:      'Laravel: configuration via config()',
+                ));
+                break; // one per file is enough
+            }
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -90,6 +160,12 @@ class ArchitectureAnalyzer extends BaseAnalyzer
             recommendation: "Create {$serviceName} and move business logic there. Inject it via constructor.",
             codeBefore:     "class {$className} extends Controller {\n    public function store(Request \$request) {\n        // 50+ lines of business logic\n    }\n}",
             codeAfter:      "class {$className} extends Controller {\n    public function __construct(private {$serviceName} \$service) {}\n    public function store(StoreRequest \$request) {\n        return \$this->service->create(\$request->validated());\n    }\n}",
+            confidence:     'high',
+            impact:         'Restores testability and separation of concerns; shrinks the HTTP layer.',
+            effort:         'large',
+            breakingRisk:   'medium',
+            rootCause:      'HTTP and business responsibilities mixed in one class.',
+            principle:      'SOLID: Single Responsibility',
         ));
     }
 
@@ -134,6 +210,12 @@ class ArchitectureAnalyzer extends BaseAnalyzer
             recommendation: 'Create a Service class for all business/data logic. Inject it in the controller constructor.',
             codeBefore:     "public function store(Request \$request) {\n    \$user = User::create(\$request->all());\n}",
             codeAfter:      "public function store(StoreUserRequest \$request) {\n    \$user = \$this->userService->create(\$request->validated());\n    return UserResource::make(\$user);\n}",
+            confidence:     'medium',
+            impact:         'Enables unit testing without a database and centralises data logic.',
+            effort:         'medium',
+            breakingRisk:   'medium',
+            rootCause:      'Persistence accessed directly from the HTTP layer.',
+            principle:      'SOLID: Dependency Inversion',
         ));
     }
 

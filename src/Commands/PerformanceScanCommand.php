@@ -8,6 +8,7 @@ use CodeGuardian\Laravel\Analyzers\PerformanceAnalyzer;
 use CodeGuardian\Laravel\Agents\PerformanceAgent;
 use CodeGuardian\Laravel\Support\AiClient;
 use CodeGuardian\Laravel\Support\CodeScanner;
+use CodeGuardian\Laravel\Support\FindingFilter;
 use CodeGuardian\Laravel\Support\ReportFormatter;
 use Illuminate\Console\Command;
 
@@ -17,7 +18,11 @@ class PerformanceScanCommand extends Command
                             {--path=   : Directory to scan (default: base_path())}
                             {--type=   : Project type: laravel or flutter}
                             {--output= : Save report to this directory}
-                            {--mode=   : Engine mode: static | hybrid | ai (auto-detected when API key present)}';
+                            {--mode=   : Engine mode: static | hybrid | ai (auto-detected when API key present)}
+                            {--severity=     : Filter findings by severity (csv): critical,high,medium,low}
+                            {--min-severity= : Keep only findings at or above this severity}
+                            {--category=     : Filter findings by category substring (csv)}
+                            {--confidence=   : Filter findings by confidence (csv): high,medium,low}';
 
     protected $description = 'Senior Performance Engineer review — N+1, missing indexes, cache, memory leaks — with Claude AI when key is configured';
 
@@ -53,6 +58,19 @@ class PerformanceScanCommand extends Command
             'ai'     => $this->runAiPerformance($context),
             default  => $this->runStaticPerformance($files),
         };
+
+        // Optional, combinable finding filters
+        $filterSpec = FindingFilter::fromOptions([
+            'severity'     => $this->option('severity'),
+            'min-severity' => $this->option('min-severity'),
+            'category'     => $this->option('category'),
+            'confidence'   => $this->option('confidence'),
+        ]);
+        if (! FindingFilter::isEmpty($filterSpec)) {
+            $findings = FindingFilter::apply($findings, $filterSpec);
+            $this->line('  🔎 Filters applied — ' . count($findings) . ' finding(s) match.');
+            $this->newLine();
+        }
 
         // Print results
         $this->info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');

@@ -26,6 +26,11 @@ class TechDebtAnalyzer extends BaseAnalyzer
             $this->checkMissingReturnTypes($filePath, $content);
             $this->checkMagicNumbers($filePath, $content);
             $this->checkDeepNesting($filePath, $content);
+            // ── Extended maintainability checks ──────────────────────────────
+            $this->checkLongParameterList($filePath, $content);
+            $this->checkBooleanFlagParameter($filePath, $content);
+            $this->checkEmptyCatch($filePath, $content);
+            $this->checkGodClass($filePath, $content);
         }
 
         $findings = $this->flushResults();
@@ -346,6 +351,132 @@ class TechDebtAnalyzer extends BaseAnalyzer
                 codeAfter:      "if (! \$user) return;\nif (! \$user->isActive()) return;\nif (! \$user->hasPermission()) return;\n// do work...",
             ));
         }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Extended maintainability checks
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /** Methods with too many parameters (>4) — a sign of missing value objects. */
+    private function checkLongParameterList(string $filePath, string $content): void
+    {
+        if (preg_match_all('/function\s+(\w+)\s*\(([^)]*)\)/', $content, $matches, PREG_OFFSET_CAPTURE)) {
+            foreach ($matches[2] as $i => $paramCapture) {
+                $params = trim($paramCapture[0]);
+                if ($params === '') {
+                    continue;
+                }
+                $count = count(array_filter(array_map('trim', explode(',', $params))));
+                if ($count <= 4) {
+                    continue;
+                }
+
+                $name = $matches[1][$i][0];
+                $line = substr_count(substr($content, 0, $matches[0][$i][1]), "\n") + 1;
+
+                $this->addResult(AnalysisResult::make(
+                    category:       'long_parameter_list',
+                    severity:       $count >= 7 ? 'medium' : 'low',
+                    title:          "Long parameter list: {$this->baseName($filePath)}::{$name}() ({$count} params)",
+                    description:    "Method '{$name}' takes {$count} parameters. Long parameter lists are hard to call correctly and usually indicate a missing value object / DTO.",
+                    file:           $filePath,
+                    lineStart:      $line,
+                    lineEnd:        $line,
+                    recommendation: 'Group related parameters into a dedicated DTO / value object, or a parameter object.',
+                    codeBefore:     "public function create(\$name, \$email, \$phone, \$address, \$city, \$zip) {}",
+                    codeAfter:      "public function create(CreateUserData \$data) {}",
+                    confidence:     'high',
+                    impact:         'Reduces call-site errors and improves readability/testability.',
+                    effort:         'medium',
+                    breakingRisk:   'medium',
+                    rootCause:      'Related data passed as loose scalars instead of an object.',
+                    principle:      'Clean Code: parameter object',
+                ));
+            }
+        }
+    }
+
+    /** Boolean flag parameters encourage a method to do two things. */
+    private function checkBooleanFlagParameter(string $filePath, string $content): void
+    {
+        $lines = explode("\n", $content);
+        foreach ($lines as $lineNum => $line) {
+            if (preg_match('/function\s+(\w+)\s*\([^)]*\bbool\s+\$\w+/', $line, $m)
+                || preg_match('/function\s+(\w+)\s*\([^)]*\$\w+\s*=\s*(?:true|false)\b/', $line, $m)) {
+                $this->addResult(AnalysisResult::make(
+                    category:       'boolean_flag',
+                    severity:       'low',
+                    title:          "Boolean flag parameter in {$m[1]}()",
+                    description:    'Line ' . ($lineNum + 1) . ": method '{$m[1]}' accepts a boolean flag. Flags usually mean the method has two responsibilities chosen at the call site.",
+                    file:           $filePath,
+                    lineStart:      $lineNum + 1,
+                    lineEnd:        $lineNum + 1,
+                    codeSnippet:    trim($line),
+                    recommendation: 'Split into two intention-revealing methods, or pass an enum instead of a boolean.',
+                    codeBefore:     "public function save(\$user, bool \$notify = true) {}",
+                    codeAfter:      "public function save(\$user) {}\npublic function saveAndNotify(\$user) {}",
+                    confidence:     'medium',
+                    impact:         'Clarifies intent and removes hidden branching.',
+                    effort:         'small',
+                    breakingRisk:   'medium',
+                    rootCause:      'Behaviour toggled by a boolean argument.',
+                    principle:      'Clean Code: avoid flag arguments',
+                ));
+                break; // one per file
+            }
+        }
+    }
+
+    /** Empty catch blocks silently swallow errors. */
+    private function checkEmptyCatch(string $filePath, string $content): void
+    {
+        // catch (...) { } with only whitespace/comments inside
+        if (preg_match('/catch\s*\([^)]*\)\s*\{\s*(?:\/\/[^\n]*\s*|\/\*.*?\*\/\s*)*\}/s', $content, $m, PREG_OFFSET_CAPTURE)) {
+            $line = substr_count(substr($content, 0, $m[0][1]), "\n") + 1;
+            $this->addResult(AnalysisResult::make(
+                category:       'swallowed_exception',
+                severity:       'medium',
+                title:          "Empty catch block in {$this->baseName($filePath)}",
+                description:    'Line ' . $line . ': an exception is caught and silently discarded. This hides failures and makes debugging production incidents very hard.',
+                file:           $filePath,
+                lineStart:      $line,
+                lineEnd:        $line,
+                recommendation: 'At minimum log the exception (report($e)/Log::error). Re-throw or handle it meaningfully.',
+                codeBefore:     "try { risky(); } catch (\\Throwable \$e) {}",
+                codeAfter:      "try { risky(); } catch (\\Throwable \$e) { report(\$e); throw \$e; }",
+                confidence:     'high',
+                impact:         'Restores visibility into failures; prevents silent data loss.',
+                effort:         'small',
+                breakingRisk:   'low',
+                rootCause:      'Exception caught without logging or handling.',
+                principle:      'Reliability: never swallow exceptions',
+            ));
+        }
+    }
+
+    /** God class — too many public methods regardless of line count. */
+    private function checkGodClass(string $filePath, string $content): void
+    {
+        $publicMethods = preg_match_all('/public\s+function\s+\w+/', $content);
+        if ($publicMethods < 20) {
+            return;
+        }
+
+        $this->addResult(AnalysisResult::make(
+            category:       'god_class',
+            severity:       $publicMethods >= 30 ? 'high' : 'medium',
+            title:          "God class: {$this->baseName($filePath)} ({$publicMethods} public methods)",
+            description:    "Class exposes {$publicMethods} public methods. Classes with this many responsibilities are hard to understand, test, and change safely.",
+            file:           $filePath,
+            lineStart:      1,
+            recommendation: 'Identify cohesive groups of methods and extract them into focused collaborator classes.',
+            confidence:     'high',
+            impact:         'Lower coupling and a clearer responsibility boundary.',
+            effort:         'large',
+            breakingRisk:   'medium',
+            rootCause:      'Single class accreted many unrelated responsibilities.',
+            principle:      'SOLID: Single Responsibility',
+        ));
     }
 
     /**

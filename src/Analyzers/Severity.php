@@ -31,12 +31,37 @@ final class Severity
         self::LOW      => 3,
     ];
 
+    /** Indicative CVSS v3.1 base-score bands per severity (for reporting only). */
+    public const CVSS_BAND = [
+        self::CRITICAL => '9.0–10.0',
+        self::HIGH     => '7.0–8.9',
+        self::MEDIUM   => '4.0–6.9',
+        self::LOW      => '0.1–3.9',
+    ];
+
     /** Return a severity level clamped to a known value. */
     public static function clamp(string $severity): string
     {
         return in_array($severity, [self::CRITICAL, self::HIGH, self::MEDIUM, self::LOW], true)
             ? $severity
             : self::MEDIUM;
+    }
+
+    /**
+     * Is $severity at least as severe as $minimum?
+     * e.g. atLeast('high', 'medium') === true; atLeast('low', 'high') === false.
+     */
+    public static function atLeast(string $severity, string $minimum): bool
+    {
+        $s = self::ORDER[self::clamp($severity)] ?? 3;
+        $m = self::ORDER[self::clamp($minimum)]  ?? 3;
+        return $s <= $m;
+    }
+
+    /** All severities, most-severe first. */
+    public static function all(): array
+    {
+        return [self::CRITICAL, self::HIGH, self::MEDIUM, self::LOW];
     }
 
     private function __construct() {}

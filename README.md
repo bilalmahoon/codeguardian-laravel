@@ -14,12 +14,14 @@ A static code analysis package for Laravel projects. Runs directly in your exist
 
 | Analyzer | What It Finds |
 |---|---|
-| **Architecture** | Fat controllers (>150 lines), missing service layer, direct DB in controllers, inline validation, facade overuse |
-| **Security** | SQL injection, XSS `{!! !!}`, hardcoded secrets & API keys, mass assignment `$request->all()`, missing authorization, debug code left in production, insecure file uploads |
-| **Performance** | N+1 queries, `Model::all()` without pagination, `count()` on loaded collections, missing eager loading, exports without chunking |
-| **Tech Debt** | Large classes, high cyclomatic complexity, duplicated code blocks, TODO/FIXME debt, commented-out dead code, missing return types, magic numbers, deep nesting |
+| **Architecture** | Fat controllers (>150 lines), missing service layer, direct DB in controllers, inline validation, facade overuse, business/integration logic in models, `env()` used outside `config/` (null after `config:cache`) |
+| **Security** | SQL injection, XSS `{!! !!}`, hardcoded secrets & API keys, mass assignment (`$request->all()` **and** `$guarded = []`), missing authorization, debug code, insecure file uploads, **command injection, code injection (`eval`), insecure deserialization, weak crypto (md5/sha1 on secrets), predictable randomness for tokens, path traversal, SSRF, open redirect, blanket CSRF exemption, hard-enabled debug, dynamic file inclusion, disabled TLS verification** |
+| **Performance** | N+1 queries, query-in-loop (whereIn batching), over-fetching (`::all()->filter()`), nested loops (O(n²)), `Model::all()` without pagination, `count()` on loaded collections, missing eager loading, exports without chunking |
+| **Tech Debt** | Large/God classes, high cyclomatic complexity, duplicated code blocks, TODO/FIXME debt, dead code, missing return types, magic numbers, deep nesting, long parameter lists, boolean flag parameters, empty/swallowed catch blocks |
 | **Test Generator** | Generates PHPUnit test stubs from method signatures (controller, service, model, generic) |
 | **Refactoring** | Auto-fixes: `$request->all()` → `$request->validated()`, removes `dd()`/`dump()` debug calls. Reports manual fixes for the rest |
+
+> **Security taxonomy.** Every security finding is mapped to its **OWASP Top 10 (2021)** category and a **CWE** id, with an indicative **CVSS band**, a **confidence** level, expected **impact**, estimated **effort**, and **breaking-change risk** — so findings are triage-ready, not just flags.
 
 ---
 
@@ -310,6 +312,67 @@ Reports are saved to `storage/codeguardian/reports/`.
 | 60–69 | D | Needs work |
 | < 60 | F | Needs significant refactoring |
 
+### Anatomy of a finding
+
+Every finding is **actionable** — it carries the context an engineer needs to triage and fix it without re-reading the whole file:
+
+| Field | Meaning |
+|---|---|
+| `severity` | critical / high / medium / low |
+| `confidence` | high / medium / low — how sure the rule is (use to tune signal/noise) |
+| `category` | machine-readable type, e.g. `sql_injection`, `n_plus_one`, `god_class` |
+| `description` | **why it matters**, with the offending line number |
+| `root_cause` | the underlying reason it happens |
+| `code_snippet` | the evidence (the offending line) |
+| `recommendation` | the suggested fix |
+| `code_before` / `code_after` | a concrete better implementation |
+| `impact` | the expected benefit of fixing it |
+| `effort` | trivial / small / medium / large |
+| `breaking_risk` | none / low / medium / high — how risky the fix is |
+| `cwe` / `owasp` | security taxonomy (security findings) |
+| `principle` | the engineering principle involved (SOLID:SRP, Clean Code, …) |
+
+All fields are included in the JSON report and rendered in the HTML report.
+
+### Risk score (explainable)
+
+In addition to the quality **scores** (how good the code is), `analyze` produces a **risk score** (0–100, how *urgently* it needs attention), weighted by **severity × confidence**, and always paired with plain-English reasoning:
+
+```
+  Risk Score: 62/100  (CRITICAL)
+    • 2 critical finding(s) drive the risk to its ceiling — these should block release.
+    • Concentrated in: sql injection (2), n plus one (3), missing types (4).
+    • Weighted across 14 finding(s) by severity × confidence.
+```
+
+---
+
+## Filtering findings
+
+Every review command supports optional, **combinable** filters. With no filter flags the behaviour is unchanged (everything is reported). Filters are AND-combined; each CSV value is OR-combined.
+
+| Flag | Example | Keeps |
+|---|---|---|
+| `--severity` | `--severity=critical,high` | only those severities |
+| `--min-severity` | `--min-severity=high` | findings at or above that severity |
+| `--category` | `--category=sql_injection,n_plus_one` | categories matching any substring |
+| `--confidence` | `--confidence=high` | findings at that confidence |
+| `--owasp` | `--owasp=A03,A01` | security findings in those OWASP categories |
+| `--cwe` | `--cwe=CWE-89` | findings with that CWE id |
+
+```bash
+# Only high-confidence, high+ severity issues
+php artisan codeguardian:analyze --min-severity=high --confidence=high
+
+# Only injection-class security issues
+php artisan codeguardian:security --owasp=A03
+
+# Only N+1 / query-in-loop performance issues
+php artisan codeguardian:performance --category=n_plus_one,query_in_loop
+```
+
+Available on `codeguardian:analyze`, `codeguardian:security`, and `codeguardian:performance`. (`security` and `performance` also support `--owasp`/`--cwe` where applicable.)
+
 ---
 
 ## Example Output
@@ -419,6 +482,56 @@ Or set `CODEGUARDIAN_MODE=ai` in `.env` to make AI the default.
 Exit codes:
 - `0` = Success (no issues at or above `--fail-on` level)
 - `1` = Issues found at the specified severity level
+
+---
+
+## Extending the engine (add your own rule)
+
+The static engine is built from small, independent analyzers. Adding a check is a localized change:
+
+1. Open the relevant analyzer in `src/Analyzers/` (`SecurityAnalyzer`, `PerformanceAnalyzer`, `ArchitectureAnalyzer`, or `TechDebtAnalyzer`).
+2. Add a `private function checkYourRule(string $filePath, string $content): void` and call it from `analyze()`.
+3. Emit findings via `AnalysisResult::make()` — populate the actionable metadata so your rule is triage-ready:
+
+```php
+$this->addResult(AnalysisResult::make(
+    category:       'my_rule',
+    severity:       'high',
+    title:          'Short, specific title',
+    description:    'Why it matters, with the line number.',
+    file:           $filePath,
+    lineStart:      $lineNum + 1,
+    recommendation: 'The concrete fix.',
+    codeBefore:     '...',
+    codeAfter:      '...',
+    confidence:     'high',          // tune signal/noise
+    impact:         'What fixing it buys you.',
+    effort:         'small',
+    breakingRisk:   'low',
+    rootCause:      'The underlying reason.',
+    cwe:            'CWE-123',        // security rules
+    owasp:          'A01:2021-...',   // security rules
+    principle:      'SOLID:SRP',      // design rules
+));
+```
+
+4. Add a unit test in `tests/Unit/Analyzers/` asserting your category is found on a positive fixture **and not** on a clean one (guarding against false positives).
+
+Design principles for new rules: **high confidence, low false positives**. When a pattern is ambiguous, gate it on a taint/context signal and set `confidence` accordingly rather than emitting a noisy finding.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause / Fix |
+|---|---|
+| `No issues found` on a large codebase in seconds | You're in `static` mode (expected — it's fast). For deeper, intent-aware review add an API key and use `--mode=hybrid`. |
+| `--api=...` analyzes unrelated files | Route resolution falls back to regex if the Laravel router can't resolve the URI. Verify the route exists with `php artisan route:list`. |
+| Reports not generated | Check write permissions on `storage/codeguardian/`, or pass `--output=` to a writable directory. |
+| Too much noise | Use filters: `--min-severity=high`, `--confidence=high`, or `--category=`. |
+| AI mode falls back to static | No/invalid API key, or the configured model returned 404. Check `CODEGUARDIAN_PROVIDER` and the matching key in `.env`. |
+| Dashboard returns 403 | It's local-only by default. Set `APP_ENV=local`, define a `viewCodeGuardian` gate, or set `CODEGUARDIAN_DASHBOARD_LOCAL_ONLY=false`. |
+| `env()` finding in app code | Intentional design rule — `env()` returns null after `config:cache`. Move the value into `config/*.php` and read it via `config()`. |
 
 ---
 

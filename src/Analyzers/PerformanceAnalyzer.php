@@ -21,6 +21,10 @@ class PerformanceAnalyzer extends BaseAnalyzer
             $this->checkIneffcientCollectionUsage($filePath, $content);
             $this->checkMissingDatabaseIndexHints($filePath, $content);
             $this->checkChunking($filePath, $content);
+            // ── Extended performance checks ──────────────────────────────────
+            $this->checkQueryInsideLoop($filePath, $content);
+            $this->checkCollectionOverFetch($filePath, $content);
+            $this->checkNestedLoops($filePath, $content);
         }
 
         $findings = $this->flushResults();
@@ -86,6 +90,12 @@ class PerformanceAnalyzer extends BaseAnalyzer
                         recommendation: 'Use eager loading with ->with(\'relationshipName\') when fetching the collection.',
                         codeBefore:     "\$orders = Order::all();\nforeach (\$orders as \$order) {\n    echo \$order->user->name; // N+1!\n}",
                         codeAfter:      "\$orders = Order::with('user')->get();\nforeach (\$orders as \$order) {\n    echo \$order->user->name; // Only 2 queries!\n}",
+                        confidence:     'medium',
+                        impact:         'Query count grows linearly with rows (1 + N). Dominant cause of slow list/detail endpoints.',
+                        effort:         'small',
+                        breakingRisk:   'none',
+                        rootCause:      'Relationship accessed per-iteration without eager loading.',
+                        principle:      'Performance: avoid N+1',
                     ));
                     break; // one issue per file for N+1 to avoid noise
                 }
@@ -269,6 +279,153 @@ class PerformanceAnalyzer extends BaseAnalyzer
                 codeAfter:      "User::chunk(500, function(\$users) use (\$export) {\n    foreach (\$users as \$user) { \$export->add(\$user); }\n});",
             ));
         }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Extended performance checks
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Detect a database query executed inside a loop body — a classic N+1 that
+     * eager loading cannot fix (it needs batching / whereIn).
+     */
+    private function checkQueryInsideLoop(string $filePath, string $content): void
+    {
+        $lines        = explode("\n", $content);
+        $bracketDepth  = 0;
+        $loopStack     = [];
+
+        $queryPattern = '/\b[A-Z][A-Za-z0-9_]*::\s*(?:where|find|findOrFail|first|firstWhere|get|count|sum|exists|value|pluck)\b/';
+        $dbPattern    = '/\bDB::\s*(?:table|select|insert|update|delete)\b/';
+
+        foreach ($lines as $lineNum => $line) {
+            if (preg_match('/\b(?:foreach|while|for)\s*\(/', $line)) {
+                $loopStack[] = $bracketDepth;
+            }
+            $bracketDepth += substr_count($line, '{') - substr_count($line, '}');
+            if (! empty($loopStack) && $bracketDepth <= end($loopStack)) {
+                array_pop($loopStack);
+            }
+
+            if (empty($loopStack) || $this->isComment($line)) {
+                continue;
+            }
+
+            if (preg_match($queryPattern, $line) || preg_match($dbPattern, $line)) {
+                $this->addResult(AnalysisResult::make(
+                    category:       'query_in_loop',
+                    severity:       'high',
+                    title:          'Database query executed inside a loop',
+                    description:    'Line ' . ($lineNum + 1) . ': a query runs on every loop iteration. This is an N+1 that eager loading will not fix — it issues one round-trip per item.',
+                    file:           $filePath,
+                    lineStart:      $lineNum + 1,
+                    lineEnd:        $lineNum + 1,
+                    codeSnippet:    trim($line),
+                    recommendation: 'Hoist the query out of the loop and batch it (whereIn + keyBy), or eager load the relationship.',
+                    codeBefore:     "foreach (\$ids as \$id) {\n    \$users[] = User::find(\$id); // N queries\n}",
+                    codeAfter:      "\$users = User::whereIn('id', \$ids)->get()->keyBy('id'); // 1 query",
+                    confidence:     'medium',
+                    impact:         'Latency and DB load scale with the number of iterations.',
+                    effort:         'medium',
+                    breakingRisk:   'low',
+                    rootCause:      'Per-iteration round-trip to the database.',
+                    principle:      'Performance: batch over loop',
+                ));
+                break; // one per file is enough signal
+            }
+        }
+    }
+
+    /**
+     * Detect fetching a full collection then refining it in PHP
+     * (->get()->where()/filter()/pluck()/first()/sortBy()), which should be
+     * pushed down into the SQL query.
+     */
+    private function checkCollectionOverFetch(string $filePath, string $content): void
+    {
+        if (! $this->isController($filePath) && ! $this->isService($filePath)) {
+            return;
+        }
+
+        $lines = explode("\n", $content);
+        foreach ($lines as $lineNum => $line) {
+            if ($this->isComment($line)) {
+                continue;
+            }
+            if (preg_match('/->get\s*\(\s*\)\s*->\s*(where|filter|first|firstWhere|pluck|sortBy|sortByDesc|reject|map|contains|whereIn)\b/', $line)
+                || preg_match('/::all\s*\(\s*\)\s*->\s*(where|filter|first|firstWhere|pluck|sortBy|reject|contains)\b/', $line)) {
+                $this->addResult(AnalysisResult::make(
+                    category:       'over_fetching',
+                    severity:       'medium',
+                    title:          'Collection filtered in PHP after fetching all rows',
+                    description:    'Line ' . ($lineNum + 1) . ': all rows are loaded then filtered/sorted in memory. The database should do this work with WHERE/ORDER BY/LIMIT.',
+                    file:           $filePath,
+                    lineStart:      $lineNum + 1,
+                    lineEnd:        $lineNum + 1,
+                    codeSnippet:    trim($line),
+                    recommendation: 'Move the predicate into the query builder: ->where(...)->orderBy(...)->limit(...).',
+                    codeBefore:     "\$active = User::all()->where('active', true);",
+                    codeAfter:      "\$active = User::where('active', true)->get();",
+                    confidence:     'medium',
+                    impact:         'Loads and discards rows, wasting memory and DB I/O.',
+                    effort:         'small',
+                    breakingRisk:   'low',
+                    rootCause:      'Filtering performed in application memory instead of SQL.',
+                    principle:      'Performance: push predicates to SQL',
+                ));
+                break;
+            }
+        }
+    }
+
+    /** Detect nested loops (O(n²)) which often hide quadratic blow-ups. */
+    private function checkNestedLoops(string $filePath, string $content): void
+    {
+        $lines        = explode("\n", $content);
+        $bracketDepth = 0;
+        $loopStack    = []; // bracket depths at which currently-open loops started
+
+        foreach ($lines as $lineNum => $line) {
+            $isLoop = (bool) preg_match('/\b(?:foreach|for|while)\s*\(/', $line);
+
+            if ($isLoop && ! empty($loopStack)) {
+                $this->addResult(AnalysisResult::make(
+                    category:       'nested_loops',
+                    severity:       'low',
+                    title:          'Nested loops detected (potential O(n²))',
+                    description:    'Line ' . ($lineNum + 1) . ': a loop is nested inside another loop. For large inputs this is quadratic and can dominate response time.',
+                    file:           $filePath,
+                    lineStart:      $lineNum + 1,
+                    lineEnd:        $lineNum + 1,
+                    codeSnippet:    trim($line),
+                    recommendation: 'Index one collection (keyBy / associative array) for O(1) lookups instead of an inner scan.',
+                    confidence:     'low',
+                    impact:         'Quadratic CPU growth as data size increases.',
+                    effort:         'medium',
+                    breakingRisk:   'low',
+                    rootCause:      'Inner loop re-scans a collection per outer iteration.',
+                    principle:      'Performance: avoid quadratic scans',
+                ));
+                return;
+            }
+
+            if ($isLoop) {
+                $loopStack[] = $bracketDepth;
+            }
+
+            $bracketDepth += substr_count($line, '{') - substr_count($line, '}');
+
+            // Close any loops whose block we've exited.
+            while (! empty($loopStack) && $bracketDepth <= end($loopStack)) {
+                array_pop($loopStack);
+            }
+        }
+    }
+
+    private function isComment(string $line): bool
+    {
+        $t = ltrim($line);
+        return str_starts_with($t, '//') || str_starts_with($t, '#') || str_starts_with($t, '*');
     }
 
     protected function calculateScore(array $findings): int

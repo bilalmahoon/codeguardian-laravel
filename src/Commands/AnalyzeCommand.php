@@ -8,7 +8,9 @@ use CodeGuardian\Laravel\Analyzers\StaticOrchestrator;
 use CodeGuardian\Laravel\PackageOrchestrator;
 use CodeGuardian\Laravel\Support\AiClient;
 use CodeGuardian\Laravel\Support\CodeScanner;
+use CodeGuardian\Laravel\Support\FindingFilter;
 use CodeGuardian\Laravel\Support\ReportFormatter;
+use CodeGuardian\Laravel\Support\RiskScorer;
 use Illuminate\Console\Command;
 
 class AnalyzeCommand extends Command
@@ -23,6 +25,12 @@ class AnalyzeCommand extends Command
                             {--format=   : Report format: json, html, or both (default: both)}
                             {--mode=     : Engine mode: static | hybrid (static + Claude AI) | ai (Claude only)}
                             {--refactor  : After analysis, start interactive refactoring workflow}
+                            {--severity=     : Filter findings by severity (csv): critical,high,medium,low}
+                            {--min-severity= : Keep only findings at or above this severity}
+                            {--category=     : Filter findings by category substring (csv), e.g. sql_injection,n_plus_one}
+                            {--confidence=   : Filter findings by confidence (csv): high,medium,low}
+                            {--owasp=        : Filter findings by OWASP tag substring (csv), e.g. A03,A01}
+                            {--cwe=          : Filter findings by CWE id substring (csv), e.g. CWE-89}
                             {--no-report : Print findings to console only, no files saved}';
 
     protected $description = 'Run a full CodeGuardian analysis — Principal SE + Senior DevOps + Senior QA level review';
@@ -94,6 +102,28 @@ class AnalyzeCommand extends Command
         if ($results === null) {
             return self::FAILURE;
         }
+
+        // Optional, combinable finding filters (severity/category/confidence/owasp/cwe)
+        $filterSpec = FindingFilter::fromOptions([
+            'severity'     => $this->option('severity'),
+            'min-severity' => $this->option('min-severity'),
+            'category'     => $this->option('category'),
+            'confidence'   => $this->option('confidence'),
+            'owasp'        => $this->option('owasp'),
+            'cwe'          => $this->option('cwe'),
+        ]);
+        if (! FindingFilter::isEmpty($filterSpec)) {
+            $results = FindingFilter::applyToResult($results, $filterSpec);
+            $kept    = $results['summary']['total_issues'] ?? 0;
+            $this->newLine();
+            $this->line('  🔎 Filters applied — ' . $kept . ' finding(s) match.');
+        }
+
+        // Explainable risk assessment (severity × confidence) — Phase 6
+        $risk = RiskScorer::assess($results['all_findings'] ?? []);
+        $results['summary']['risk_score']     = $risk['risk_score'];
+        $results['summary']['risk_level']     = $risk['risk_level'];
+        $results['summary']['risk_reasoning'] = $risk['reasoning'];
 
         $this->newLine();
         $this->printSummary($results, $mode);
@@ -483,6 +513,18 @@ class AnalyzeCommand extends Command
             if ($high > 0)     $this->warn("  🟠 High:     {$high}");
             if ($medium > 0)   $this->line("  🟡 Medium:   {$medium}");
             if ($low > 0)      $this->line("  🟢 Low:      {$low}");
+        }
+
+        // Explainable risk assessment
+        if (isset($summary['risk_score'])) {
+            $level = strtoupper((string) ($summary['risk_level'] ?? ''));
+            $rs    = $summary['risk_score'];
+            $color = $rs >= 45 ? 'error' : ($rs >= 20 ? 'warn' : 'info');
+            $this->newLine();
+            $this->{$color}("  Risk Score: {$rs}/100  ({$level})");
+            foreach ((array) ($summary['risk_reasoning'] ?? []) as $reason) {
+                $this->line("    • {$reason}");
+            }
         }
 
         $topFindings = $summary['top_findings'] ?? [];

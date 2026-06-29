@@ -107,6 +107,14 @@ class ReportFormatter
   .finding-title { font-weight: 600; font-size: .95rem; }
   .finding-file  { font-size: .8rem; color: #94a3b8; margin-bottom: .5rem; font-family: monospace; }
   .finding-desc  { font-size: .9rem; color: #cbd5e1; }
+  .finding-tags  { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .5rem; }
+  .tag { font-size: .68rem; font-weight: 600; padding: .15rem .5rem; border-radius: 9999px; background: #0f172a; color: #cbd5e1; border: 1px solid #334155; }
+  .tag-owasp { color: #fca5a5; border-color: #7f1d1d; }
+  .tag-cwe { color: #fdba74; border-color: #7c2d12; }
+  .tag-principle { color: #93c5fd; border-color: #1e3a8a; }
+  .tag-conf { color: #86efac; border-color: #14532d; }
+  .finding-meta  { margin-top: .5rem; font-size: .8rem; color: #94a3b8; display: grid; gap: .15rem; }
+  .finding-meta strong { color: #cbd5e1; }
   .finding-fix   { margin-top: .5rem; font-size: .85rem; background: #0f172a; padding: .75rem; border-radius: .4rem; }
   pre { background: #0f172a; padding: 1rem; border-radius: .5rem; overflow-x: auto; font-size: .8rem; color: #93c5fd; margin-top: .5rem; }
   .test-card { background: #1e293b; border-radius: .5rem; padding: 1rem; margin-bottom: .75rem; }
@@ -197,6 +205,9 @@ HTML;
 
                 $fixHtml = $rec ? "<div class=\"finding-fix\">💡 {$rec}</div>" : '';
 
+                $tagsHtml  = $this->renderFindingTags($f);
+                $metaHtml  = $this->renderFindingMeta($f);
+
                 $html .= <<<CARD
 <div class="finding {$sev}">
   <div class="finding-header">
@@ -204,7 +215,9 @@ HTML;
     <span class="finding-title">{$title}</span>
   </div>
   <div class="finding-file">{$file}{$line}</div>
+  {$tagsHtml}
   <div class="finding-desc">{$desc}</div>
+  {$metaHtml}
   {$codeSnippet}
   {$fixHtml}
 </div>
@@ -215,6 +228,46 @@ CARD;
         }
 
         return $html;
+    }
+
+    /** Small pill tags for security taxonomy / confidence (CWE, OWASP, confidence). */
+    private function renderFindingTags(array $f): string
+    {
+        $tags = [];
+        if (! empty($f['owasp'])) {
+            $tags[] = '<span class="tag tag-owasp">OWASP ' . e($f['owasp']) . '</span>';
+        } elseif (! empty($f['owasp_reference'])) {
+            $tags[] = '<span class="tag tag-owasp">' . e($f['owasp_reference']) . '</span>';
+        }
+        if (! empty($f['cwe'])) {
+            $tags[] = '<span class="tag tag-cwe">' . e($f['cwe']) . '</span>';
+        }
+        if (! empty($f['principle'])) {
+            $tags[] = '<span class="tag tag-principle">' . e($f['principle']) . '</span>';
+        }
+        if (! empty($f['confidence'])) {
+            $tags[] = '<span class="tag tag-conf">confidence: ' . e($f['confidence']) . '</span>';
+        }
+
+        return empty($tags) ? '' : '<div class="finding-tags">' . implode(' ', $tags) . '</div>';
+    }
+
+    /** Impact / effort / breaking-risk / root-cause line (Phase 7 actionable metadata). */
+    private function renderFindingMeta(array $f): string
+    {
+        $rows = [];
+        foreach ([
+            'impact'        => 'Expected impact',
+            'effort'        => 'Effort',
+            'breaking_risk' => 'Breaking-change risk',
+            'root_cause'    => 'Root cause',
+        ] as $key => $label) {
+            if (! empty($f[$key])) {
+                $rows[] = '<div><strong>' . $label . ':</strong> ' . e((string) $f[$key]) . '</div>';
+            }
+        }
+
+        return empty($rows) ? '' : '<div class="finding-meta">' . implode('', $rows) . '</div>';
     }
 
     private function renderTests(array $tests): string
