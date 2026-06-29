@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CodeGuardian\Laravel\Commands;
 
+use CodeGuardian\Laravel\Analyzers\Severity;
 use CodeGuardian\Laravel\Analyzers\StaticOrchestrator;
 use CodeGuardian\Laravel\Console\ConsoleReporter;
 use CodeGuardian\Laravel\Console\ProgressFormat;
@@ -15,6 +16,7 @@ use CodeGuardian\Laravel\Support\FindingFilter;
 use CodeGuardian\Laravel\Support\QualityScorer;
 use CodeGuardian\Laravel\Support\ReportFormatter;
 use CodeGuardian\Laravel\Support\RiskScorer;
+use CodeGuardian\Laravel\Support\Suppressor;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 
@@ -37,6 +39,8 @@ class AnalyzeCommand extends Command
                             {--owasp=        : Filter findings by OWASP tag substring (csv), e.g. A03,A01}
                             {--cwe=          : Filter findings by CWE id substring (csv), e.g. CWE-89}
                             {--plain     : Disable the live progress UI (plain log output, ideal for CI)}
+                            {--fail-on=  : Exit non-zero if any finding is at or above this severity: critical|high|medium|low}
+                            {--no-suppress      : Ignore config/inline suppressions (show everything)}
                             {--write-baseline   : Save the current findings as the baseline file}
                             {--against-baseline : Compare findings against the baseline (new vs existing vs fixed)}
                             {--baseline-file=   : Baseline file path (default: <project>/codeguardian-baseline.json)}
@@ -117,6 +121,23 @@ class AnalyzeCommand extends Command
             return self::FAILURE;
         }
 
+        // Suppression (config 'ignore' + inline codeguardian-ignore comments).
+        // Applied first so suppressed findings never count toward scores, the
+        // report, or the CI exit code. Bypass with --no-suppress.
+        if (! $this->option('no-suppress')) {
+            $spec   = Suppressor::specFromConfig((array) config('codeguardian.ignore', []));
+            $root   = rtrim($path, '/\\');
+            $reader = function (string $file) use ($root): ?string {
+                $full = $root . '/' . ltrim($file, '/\\');
+                return is_file($full) ? (string) @file_get_contents($full) : null;
+            };
+            [$results, $suppressed] = Suppressor::applyToResult($results, $spec, $reader);
+            if ($suppressed > 0) {
+                $this->newLine();
+                $this->line("  🔇 Suppressed {$suppressed} finding(s) via config/inline ignores.");
+            }
+        }
+
         // Optional, combinable finding filters (severity/category/confidence/owasp/cwe)
         $filterSpec = FindingFilter::fromOptions([
             'severity'     => $this->option('severity'),
@@ -174,6 +195,18 @@ class AnalyzeCommand extends Command
             if ($moduleOpt) $args['--module'] = $moduleOpt;
             if ($apiOpt)    $args['--api']    = $apiOpt;
             $this->call('codeguardian:refactor', $args);
+        }
+
+        // Explicit CI gate: fail if any finding meets the --fail-on threshold.
+        $failOn = $this->option('fail-on');
+        if (is_string($failOn) && trim($failOn) !== '') {
+            $threshold = strtolower(trim($failOn));
+            foreach ($results['all_findings'] ?? [] as $f) {
+                if (Severity::atLeast((string) ($f['severity'] ?? 'low'), $threshold)) {
+                    return self::FAILURE;
+                }
+            }
+            return self::SUCCESS;
         }
 
         // In --new-only baseline mode, CI should fail on ANY new finding.

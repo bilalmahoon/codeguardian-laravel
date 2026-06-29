@@ -127,6 +127,32 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Ignore / Suppression
+    |--------------------------------------------------------------------------
+    | Control noise without editing rules. Suppressed findings are removed
+    | before scoring, reporting, and CI exit codes.
+    |
+    | You can also suppress inline in source with comments:
+    |   // codeguardian-ignore                 → any finding on this line
+    |   // codeguardian-ignore sql_injection   → only that category on this line
+    |   // codeguardian-ignore-file            → every finding in the file
+    | (a marker on the line directly above a statement counts too.)
+    */
+
+    'ignore' => [
+        // Finding categories to always suppress, e.g. ['magic_numbers', 'commented_code']
+        'categories' => [],
+
+        // Suppress findings from these path substrings or globs,
+        // e.g. ['database/migrations/', 'tests/*', 'app/Legacy/']
+        'paths' => [],
+
+        // Inline suppression comment marker.
+        'inline_marker' => 'codeguardian-ignore',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Output Settings
     |--------------------------------------------------------------------------
     */

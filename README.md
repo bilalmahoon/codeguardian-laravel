@@ -547,6 +547,49 @@ Available on `codeguardian:analyze`, `codeguardian:security`, and `codeguardian:
 
 ---
 
+## Suppressing findings (noise control)
+
+Filters change what's *shown*; suppression removes findings entirely (from scores, reports, and CI exit codes). Two complementary mechanisms:
+
+**Config** (`config/codeguardian.php → 'ignore'`):
+
+```php
+'ignore' => [
+    'categories' => ['magic_numbers', 'commented_code'],   // never report these
+    'paths'      => ['database/migrations/', 'tests/*'],    // substrings or globs
+],
+```
+
+**Inline**, right in the source — for one-off, reviewed exceptions:
+
+```php
+$hash = md5($value);                 // codeguardian-ignore weak_cryptography
+// codeguardian-ignore               (a marker on the line above counts too)
+$legacy = $request->all();
+```
+
+```php
+// codeguardian-ignore-file          (suppresses every finding in this file)
+```
+
+A bare `// codeguardian-ignore` suppresses any finding on that line; adding category names limits it. Use `--no-suppress` to temporarily see everything.
+
+### Failing CI on a threshold
+
+`analyze` supports `--fail-on` (like `security`) so a pipeline fails on a chosen severity floor:
+
+```bash
+php artisan codeguardian:analyze --fail-on=high --plain    # non-zero if any high+ finding
+```
+
+Combine with suppression and baseline mode for precise gating — e.g. fail only on **new** high-severity findings:
+
+```bash
+php artisan codeguardian:analyze --against-baseline --new-only --fail-on=high --plain
+```
+
+---
+
 ## Example Output
 
 ```
