@@ -129,7 +129,7 @@ CodeGuardian is built for CI: standard SARIF output, a baseline/diff mode that f
 
 ### SARIF — GitHub / GitLab / Azure
 
-`--format=sarif` emits strict, schema-valid **SARIF 2.1.0**, ingested natively by GitHub code scanning, Azure DevOps (SARIF SAST Scans Tab), and GitLab. Severities map to SARIF `level` and the GitHub `security-severity` property; each result carries a stable `partialFingerprint` and CWE/OWASP `helpUri`s.
+`--format=sarif` emits strict, schema-valid **SARIF 2.1.0**, ingested natively by GitHub code scanning, Azure DevOps (SARIF SAST Scans Tab), and GitLab. Severities map to SARIF `level` and the GitHub `security-severity` property; each result carries a stable `partialFingerprint` and CWE/OWASP `helpUri`s. When a finding has a concrete replacement, a SARIF `fixes[]` entry is emitted so GitHub and IDEs can offer a one-click apply.
 
 **GitHub Actions:**
 
@@ -457,6 +457,7 @@ Reports are saved to `storage/codeguardian/reports/`.
 ```bash
 php artisan codeguardian:doctor          # health check with fix suggestions
 php artisan codeguardian:doctor --json   # machine-readable
+php artisan codeguardian:rules           # list every detection rule + its state
 ```
 
 See [Continuous Integration](#continuous-integration) for SARIF, baseline/diff, and CI wiring.
@@ -573,6 +574,28 @@ $legacy = $request->all();
 ```
 
 A bare `// codeguardian-ignore` suppresses any finding on that line; adding category names limits it. Use `--no-suppress` to temporarily see everything.
+
+### Configuring rules (enable / disable / re-severity)
+
+Take full control of the engine from config — no code changes. Rules are keyed by their finding category; list them all with `php artisan codeguardian:rules`.
+
+```php
+// config/codeguardian.php
+'rules' => [
+    'magic_numbers' => false,        // turn a rule off entirely
+    'missing_types' => 'low',        // downgrade severity
+    'n_plus_one'    => 'critical',   // upgrade severity
+    'todo_debt'     => ['enabled' => true, 'severity' => 'low'],
+],
+```
+
+```bash
+php artisan codeguardian:rules                       # full catalog + effective state
+php artisan codeguardian:rules --group=security      # one analyzer group
+php artisan codeguardian:rules --enabled-only --json # machine-readable
+```
+
+Severity overrides apply *before* scoring, filters, and CI gates, so `--min-severity` / `--fail-on` see the effective severities.
 
 ### Failing CI on a threshold
 

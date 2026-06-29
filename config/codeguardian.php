@@ -127,6 +127,27 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Rule Configuration
+    |--------------------------------------------------------------------------
+    | Enable/disable individual detection rules and override their severity,
+    | without touching engine code. Rules are keyed by their finding "category"
+    | — run `php artisan codeguardian:rules` to see every available rule id.
+    |
+    | Accepted values per rule:
+    |   false                                  → disable the rule entirely
+    |   'critical'|'high'|'medium'|'low'       → override severity
+    |   ['enabled' => bool, 'severity' => '..']→ both
+    */
+
+    'rules' => [
+        // 'magic_numbers' => false,
+        // 'missing_types' => 'low',
+        // 'n_plus_one'    => 'critical',
+        // 'todo_debt'     => ['enabled' => true, 'severity' => 'low'],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Ignore / Suppression
     |--------------------------------------------------------------------------
     | Control noise without editing rules. Suppressed findings are removed

@@ -121,4 +121,28 @@ class SarifFormatterTest extends TestCase
         $sqli  = array_values(array_filter($rules, fn($r) => $r['id'] === 'sql_injection'))[0];
         $this->assertSame('https://cwe.mitre.org/data/definitions/89.html', $sqli['helpUri']);
     }
+
+    public function test_code_after_emits_suggested_fix(): void
+    {
+        $results = ['all_findings' => [[
+            'category' => 'sql_injection', 'severity' => 'high', 'title' => 'SQLi',
+            'file' => 'app/X.php', 'line_start' => 10, 'line_end' => 10,
+            'recommendation' => 'Use bindings.',
+            'code_after' => 'DB::select("...", [$id]);',
+        ]]];
+
+        $doc    = (new SarifFormatter())->build($results);
+        $result = $doc['runs'][0]['results'][0];
+
+        $this->assertArrayHasKey('fixes', $result);
+        $replacement = $result['fixes'][0]['artifactChanges'][0]['replacements'][0];
+        $this->assertSame(10, $replacement['deletedRegion']['startLine']);
+        $this->assertSame('DB::select("...", [$id]);', $replacement['insertedContent']['text']);
+    }
+
+    public function test_no_fix_when_no_code_after(): void
+    {
+        $doc = (new SarifFormatter())->build($this->sampleResults());
+        $this->assertArrayNotHasKey('fixes', $doc['runs'][0]['results'][0]);
+    }
 }

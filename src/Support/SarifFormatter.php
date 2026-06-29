@@ -195,6 +195,22 @@ final class SarifFormatter
             ], fn($v) => $v !== null && $v !== ''),
         ];
 
+        // Suggested fix (GitHub / IDE one-click) when a concrete replacement
+        // is available. SARIF replacements need a deletedRegion + insertedContent.
+        $after = (string) ($f['code_after'] ?? '');
+        if ($after !== '') {
+            $result['fixes'] = [[
+                'description'     => ['text' => self::clip((string) ($f['recommendation'] ?: 'Apply suggested fix'), 500)],
+                'artifactChanges' => [[
+                    'artifactLocation' => ['uri' => self::uri((string) ($f['file'] ?? ''))],
+                    'replacements'     => [[
+                        'deletedRegion'   => ['startLine' => $startLine, 'endLine' => $endLine],
+                        'insertedContent' => ['text' => $after],
+                    ]],
+                ]],
+            ]];
+        }
+
         return $result;
     }
 

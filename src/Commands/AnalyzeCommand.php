@@ -16,6 +16,7 @@ use CodeGuardian\Laravel\Support\FindingFilter;
 use CodeGuardian\Laravel\Support\QualityScorer;
 use CodeGuardian\Laravel\Support\ReportFormatter;
 use CodeGuardian\Laravel\Support\RiskScorer;
+use CodeGuardian\Laravel\Support\RuleRegistry;
 use CodeGuardian\Laravel\Support\Suppressor;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
@@ -119,6 +120,18 @@ class AnalyzeCommand extends Command
 
         if ($results === null) {
             return self::FAILURE;
+        }
+
+        // Rule configuration (config 'rules'): disable rules + override severity.
+        // Applied before everything else so downstream scoring/filters/gates see
+        // the effective severities.
+        $ruleSpec = RuleRegistry::fromConfig((array) config('codeguardian.rules', []));
+        if ($ruleSpec !== []) {
+            [$results, $ruleDisabled, $ruleRemapped] = RuleRegistry::applyToResult($results, $ruleSpec);
+            if ($ruleDisabled > 0 || $ruleRemapped > 0) {
+                $this->newLine();
+                $this->line("  🎛  Rules: {$ruleDisabled} finding(s) disabled, {$ruleRemapped} severity override(s) applied.");
+            }
         }
 
         // Suppression (config 'ignore' + inline codeguardian-ignore comments).
