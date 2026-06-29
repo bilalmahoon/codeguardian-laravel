@@ -12,7 +12,11 @@ use CodeGuardian\Laravel\PackageOrchestrator;
 use CodeGuardian\Laravel\Support\AiClient;
 use CodeGuardian\Laravel\Support\Baseline;
 use CodeGuardian\Laravel\Support\CodeScanner;
+use CodeGuardian\Laravel\Support\Coverage;
+use CodeGuardian\Laravel\Support\CustomRules;
+use CodeGuardian\Laravel\Support\ExternalFindings;
 use CodeGuardian\Laravel\Support\FindingFilter;
+use CodeGuardian\Laravel\Support\GitChanges;
 use CodeGuardian\Laravel\Support\GitHubAnnotations;
 use CodeGuardian\Laravel\Support\HistoryStore;
 use CodeGuardian\Laravel\Support\QualityScorer;
@@ -34,6 +38,11 @@ class AnalyzeCommand extends Command
                             {--output=   : Output directory for reports (default: storage/codeguardian/reports)}
                             {--format=   : Report format: json, html, md, sarif, junit, both, or all (default: both)}
                             {--mode=     : Engine mode: static | hybrid (static + Claude AI) | ai (Claude only)}
+                            {--preset=   : Tuning profile: strict | balanced | lenient (user rules config still wins)}
+                            {--changed         : Only analyze files changed vs the git HEAD (uncommitted + staged)}
+                            {--since=          : Only analyze files changed since this git ref (e.g. main, origin/main, HEAD~5)}
+                            {--import=         : Merge external analyzer reports (csv of PHPStan/Psalm JSON files)}
+                            {--coverage=       : Clover XML path; flags complex code with low/no test coverage}
                             {--refactor  : After analysis, start interactive refactoring workflow}
                             {--fix       : After analysis, automatically fix the issues (safe mode: test-verified, auto-rollback)}
                             {--severity=     : Filter findings by severity (csv): critical,high,medium,low}
@@ -97,6 +106,11 @@ class AnalyzeCommand extends Command
             return self::FAILURE;
         }
 
+        // Incremental scope — restrict to files changed in git (--changed / --since).
+        if (! $this->applyIncrementalScope($context, $path)) {
+            return self::SUCCESS; // nothing changed → clean exit
+        }
+
         $totalFiles = $context['summary']['total_files'];
         $totalLines = $context['summary']['total_lines'];
         $this->info("  ✔  Found {$totalFiles} files ({$totalLines} lines)");
@@ -127,10 +141,19 @@ class AnalyzeCommand extends Command
             return self::FAILURE;
         }
 
+        // Merge extra finding sources BEFORE scoring/filters/gates so they count
+        // everywhere: project custom rules, imported PHPStan/Psalm reports, and
+        // untested-complexity gaps from a coverage report.
+        $results = $this->mergeAdditionalFindings($results, $context, $path);
+
         // Rule configuration (config 'rules'): disable rules + override severity.
         // Applied before everything else so downstream scoring/filters/gates see
         // the effective severities.
-        $ruleSpec = RuleRegistry::fromConfig((array) config('codeguardian.rules', []));
+        // Preset (strict/balanced/lenient) merged UNDER explicit user rules so
+        // the user's config always wins. --preset overrides the config value.
+        $presetName   = (string) ($this->option('preset') ?: config('codeguardian.preset', ''));
+        $presetConfig = $presetName !== '' ? RuleRegistry::preset($presetName) : [];
+        $ruleSpec = RuleRegistry::fromConfig(array_merge($presetConfig, (array) config('codeguardian.rules', [])));
         if ($ruleSpec !== []) {
             [$results, $ruleDisabled, $ruleRemapped] = RuleRegistry::applyToResult($results, $ruleSpec);
             if ($ruleDisabled > 0 || $ruleRemapped > 0) {
@@ -318,6 +341,153 @@ class AnalyzeCommand extends Command
         if ($apiOpt)    { $args['--api']    = $apiOpt; }
 
         $this->call('codeguardian:refactor', $args);
+    }
+
+    /**
+     * Restrict the scan to files changed in git (--changed / --since). Mutates
+     * $context['files'] + summary. Returns false when there is nothing to do
+     * (so the caller can exit cleanly), true otherwise.
+     */
+    private function applyIncrementalScope(array &$context, string $path): bool
+    {
+        $useChanged = (bool) $this->option('changed');
+        $since      = (string) ($this->option('since') ?: '');
+        if (! $useChanged && $since === '') {
+            return true; // not an incremental run
+        }
+
+        $repoRoot = GitChanges::repoRoot($path) ?? $path;
+        $changed  = $since !== ''
+            ? GitChanges::since($repoRoot, $since)
+            : GitChanges::workingTree($repoRoot);
+
+        if ($changed === null) {
+            $this->warn('  ⚠ Could not determine git changes (not a git repo, or git unavailable). Analyzing everything.');
+            return true;
+        }
+
+        $before           = count($context['files'] ?? []);
+        $context['files'] = GitChanges::filter($context['files'] ?? [], $changed, $repoRoot, $path);
+        $kept             = count($context['files']);
+
+        $context['summary']['total_files'] = $kept;
+        $context['summary']['total_lines'] = (int) array_sum(array_map(
+            fn($c) => substr_count((string) $c, "\n") + 1,
+            $context['files']
+        ));
+
+        $label = $since !== '' ? "since {$since}" : 'working tree';
+        $this->info("  ⚡ Incremental ({$label}): {$kept} of {$before} scanned file(s) changed.");
+
+        if ($kept === 0) {
+            $this->newLine();
+            $this->info('  ✅ No changed source files to analyze. Nothing to do.');
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Merge custom rules, imported external reports, and coverage gaps into the
+     * result set, recomputing the summary so downstream stages see them.
+     */
+    private function mergeAdditionalFindings(array $results, array $context, string $path): array
+    {
+        $files = $context['files'] ?? [];
+
+        // 1) Project-defined custom rules (config 'custom_rules').
+        $customSpecs = CustomRules::fromConfig((array) config('codeguardian.custom_rules', []));
+        if ($customSpecs !== []) {
+            $custom = CustomRules::run($files, $customSpecs);
+            if ($custom !== []) {
+                $results = $this->mergeFindings($results, $custom, 'custom_rules');
+                $this->line('  🧩 Custom rules: ' . count($custom) . ' finding(s).');
+            }
+        }
+
+        // 2) Imported PHPStan / Psalm JSON reports (--import=a.json,b.json).
+        $import = (string) ($this->option('import') ?: '');
+        if ($import !== '') {
+            $imported = [];
+            foreach (array_filter(array_map('trim', explode(',', $import))) as $reportPath) {
+                if (! is_file($reportPath)) {
+                    $this->warn("  ⚠ Import file not found: {$reportPath}");
+                    continue;
+                }
+                $imported = array_merge(
+                    $imported,
+                    ExternalFindings::fromJson((string) file_get_contents($reportPath), $path)
+                );
+            }
+            if ($imported !== []) {
+                $results = $this->mergeFindings($results, $imported, 'external');
+                $this->line('  📥 Imported ' . count($imported) . ' external finding(s).');
+            }
+        }
+
+        // 3) Coverage-aware: flag untested complex code (--coverage=clover.xml).
+        $coveragePath = (string) ($this->option('coverage') ?: '');
+        if ($coveragePath !== '' && is_file($coveragePath)) {
+            $map  = Coverage::fromClover((string) file_get_contents($coveragePath), $path);
+            $gaps = Coverage::flagUntested($map, $results['all_findings'] ?? []);
+            if ($gaps !== []) {
+                $results = $this->mergeFindings($results, $gaps, 'coverage');
+                $this->line('  🧪 Coverage: ' . count($gaps) . ' untested-complexity gap(s).');
+            }
+        } elseif ($coveragePath !== '') {
+            $this->warn("  ⚠ Coverage file not found: {$coveragePath}");
+        }
+
+        return $results;
+    }
+
+    /**
+     * Append findings under a synthetic agent and recompute severity counts +
+     * top findings so the summary stays consistent.
+     *
+     * @param array<int,array<string,mixed>> $findings
+     */
+    private function mergeFindings(array $results, array $findings, string $agent): array
+    {
+        if ($findings === []) {
+            return $results;
+        }
+
+        $results['all_findings'] = array_merge($results['all_findings'] ?? [], $findings);
+
+        $results['agent_results'][$agent]['agent']    = $agent;
+        $results['agent_results'][$agent]['findings'] = array_merge(
+            $results['agent_results'][$agent]['findings'] ?? [],
+            $findings
+        );
+
+        // Recompute severity counts from the canonical all_findings list.
+        $counts = ['critical' => 0, 'high' => 0, 'medium' => 0, 'low' => 0];
+        foreach ($results['all_findings'] as $f) {
+            $counts[Severity::clamp((string) ($f['severity'] ?? ''))]++;
+        }
+
+        $summary                 = $results['summary'] ?? [];
+        $summary['total_issues'] = count($results['all_findings']);
+        $summary['critical']     = $counts['critical'];
+        $summary['high']         = $counts['high'];
+        $summary['medium']       = $counts['medium'];
+        $summary['low']          = $counts['low'];
+        if (isset($summary['by_severity'])) {
+            $summary['by_severity'] = $counts;
+        }
+
+        $sorted = $results['all_findings'];
+        usort($sorted, fn($a, $b) =>
+            (Severity::ORDER[Severity::clamp((string) ($a['severity'] ?? ''))] ?? 4)
+            <=> (Severity::ORDER[Severity::clamp((string) ($b['severity'] ?? ''))] ?? 4)
+        );
+        $summary['top_findings'] = array_slice($sorted, 0, 10);
+
+        $results['summary'] = $summary;
+
+        return $results;
     }
 
     /**
@@ -665,6 +835,8 @@ class AnalyzeCommand extends Command
         $provider = config('codeguardian.provider', 'claude');
         $this->line("  Using AI provider: {$provider}");
 
+        \CodeGuardian\Laravel\Support\UsageMeter::reset();
+
         $orchestrator = app(PackageOrchestrator::class);
         $agentsOpt    = $this->option('agents');
         $agents       = $agentsOpt ? explode(',', $agentsOpt) : 'all';
@@ -677,12 +849,34 @@ class AnalyzeCommand extends Command
             }
         });
 
+        $this->printAiUsage();
+
         return $results;
     }
 
     // ──────────────────────────────────────────────────────────────────────────
     // Helpers
     // ──────────────────────────────────────────────────────────────────────────
+
+    /** Print AI token usage + estimated cost after an AI/hybrid run. */
+    private function printAiUsage(): void
+    {
+        $u = \CodeGuardian\Laravel\Support\UsageMeter::totals();
+        if (($u['calls'] ?? 0) === 0) {
+            return;
+        }
+
+        $this->newLine();
+        $this->line(sprintf(
+            '  💰 AI usage: %s calls · %s in + %s out = %s tokens · ~$%s',
+            number_format($u['calls']),
+            number_format($u['input']),
+            number_format($u['output']),
+            number_format($u['total']),
+            number_format($u['cost_usd'], 4)
+        ));
+        $this->line('     (cost is an estimate; tune via config codeguardian.pricing)');
+    }
 
     private function resolveRequestedAgents(): array
     {

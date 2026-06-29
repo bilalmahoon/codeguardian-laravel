@@ -81,6 +81,46 @@ final class RuleRegistry
 
     private const OFF_TOKENS = ['off', 'false', 'disabled', 'no', '0'];
 
+    /** Built-in tuning profiles. 'balanced' is the engine default (no changes). */
+    public const PRESETS = ['strict', 'balanced', 'lenient'];
+
+    /**
+     * Return a rules-config array for a named preset. Merge this UNDER the user's
+     * own 'rules' config so explicit user overrides always win.
+     *
+     * @return array<string,mixed>
+     */
+    public static function preset(string $name): array
+    {
+        return match (strtolower(trim($name))) {
+            'strict'  => [
+                // Treat maintainability debt as first-class; nothing slips by.
+                'missing_types'       => 'medium',
+                'magic_numbers'       => 'medium',
+                'deep_nesting'        => 'medium',
+                'duplication'         => 'high',
+                'high_complexity'     => 'high',
+                'large_class'         => 'high',
+                'n_plus_one'          => 'high',
+                'select_all'          => 'high',
+                'query_in_loop'       => 'high',
+                'todo_debt'           => 'low',
+            ],
+            'lenient' => [
+                // Mute the noisiest low-value rules; keep real risk loud.
+                'magic_numbers'       => false,
+                'missing_types'       => false,
+                'todo_debt'           => false,
+                'boolean_flag'        => false,
+                'long_parameter_list' => 'low',
+                'deep_nesting'        => 'low',
+                'duplication'         => 'low',
+                'dead_code'           => 'low',
+            ],
+            default   => [], // 'balanced' / unknown → engine defaults
+        };
+    }
+
     /**
      * Normalise raw config into a per-rule spec.
      *

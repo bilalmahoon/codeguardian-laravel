@@ -108,7 +108,7 @@ Every analysis produces an enterprise-quality report (console + HTML) with an **
   Composite quality: 59/100  (Grade F)
 ```
 
-The HTML report adds an **Executive Summary** card (headline verdict, grade, risk level, key counts) and a visual **Quality Dimensions** scorecard above the detailed findings — suitable for sharing with leadership.
+The HTML report adds an **Executive Summary** card (headline verdict, grade, risk level, key counts) and a visual **Quality Dimensions** scorecard above the detailed findings — suitable for sharing with leadership. It also includes a **live search + severity filter** toolbar and **collapsible sections**, so large reports stay navigable.
 
 Reports are available in multiple formats via `--format`:
 
@@ -555,6 +555,15 @@ Reports are saved to `storage/codeguardian/reports/`.
 
 ---
 
+### Get started in one command
+
+```bash
+php artisan codeguardian:init                 # publish config + scaffold CI + (optional) git hook
+php artisan codeguardian:init --ci=gitlab --hook
+```
+
+`codeguardian:init` publishes `config/codeguardian.php`, writes a ready-to-use CI workflow (GitHub Actions or GitLab CI, auto-detected), and can install a pre-commit hook that runs a fast incremental scan. Nothing is overwritten without `--force`.
+
 ### Diagnose your setup
 
 ```bash
@@ -565,6 +574,51 @@ php artisan codeguardian:rules sql_injection  # full docs for one rule (why + fi
 php artisan codeguardian:trend           # code-health trend across past runs
 php artisan codeguardian:comment --dry-run    # preview the PR/MR summary comment
 ```
+
+### Fast, free, deterministic fixes (no AI)
+
+```bash
+php artisan codeguardian:fix --dry-run    # preview the safe mechanical fixes
+php artisan codeguardian:fix              # apply them (keeps a .cgbak backup per file)
+php artisan codeguardian:fix --file=app/Http/Controllers/UserController.php
+```
+
+`codeguardian:fix` applies only the deterministic, rule-based transformations (remove `dd()`/dead code, `$request->all()` → `validated()`, add inferable return types, parameterise raw SQL, eager-load N+1, …). Every change is syntax-validated before it's written, so the engine never produces broken PHP. It's the fast, token-free counterpart to `codeguardian:refactor` (which adds the AI deep-rewrite + test-verification pipeline).
+
+### Faster runs on big codebases (incremental)
+
+```bash
+php artisan codeguardian:analyze --changed              # only files changed vs HEAD (uncommitted + staged)
+php artisan codeguardian:analyze --since=origin/main    # only files changed since a ref (ideal for PRs)
+```
+
+Incremental mode intersects the scan with `git diff`, so CI reviews a PR in seconds instead of scanning thousands of files.
+
+### Tuning presets
+
+```bash
+php artisan codeguardian:analyze --preset=strict    # maintainability debt treated as first-class
+php artisan codeguardian:analyze --preset=lenient   # mute the noisiest low-value rules
+```
+
+Set a default via `CODEGUARDIAN_PRESET` / `config('codeguardian.preset')`. Anything in your `rules` config always overrides the preset.
+
+### Bring your own rules
+
+Define project-specific detection rules in `config('codeguardian.custom_rules')` — no PHP required. Each rule scans file contents with a regex and emits a finding (with severity, message, fix text, and path filters). They flow through scoring, filters, suppression, and CI gates like built-in rules.
+
+### Merge other analyzers + coverage
+
+```bash
+php artisan codeguardian:analyze --import=phpstan.json,psalm.json   # fold PHPStan/Psalm into one report
+php artisan codeguardian:analyze --coverage=build/clover.xml        # flag complex code with low/no coverage
+```
+
+`--import=` ingests PHPStan/Psalm JSON output as findings. `--coverage=` reads a Clover report and raises an `untested_complexity` finding wherever complex/large code has little test coverage — the highest-risk gaps.
+
+### AI cost visibility
+
+When running in AI/hybrid mode, every run prints token usage and an estimated cost (`💰 AI usage: … ~$0.0123`). Tune the price table via `config('codeguardian.pricing')`.
 
 See [Continuous Integration](#continuous-integration) for SARIF, baseline/diff, and CI wiring.
 

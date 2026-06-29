@@ -148,6 +148,50 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Tuning Preset
+    |--------------------------------------------------------------------------
+    | A quick way to set the overall strictness without configuring each rule:
+    |   'strict'   → maintainability debt treated as first-class (louder)
+    |   'balanced' → engine defaults (recommended)
+    |   'lenient'  → mute the noisiest low-value rules
+    |
+    | Anything you set in 'rules' above always overrides the preset.
+    | Override per-run with `--preset=`.
+    */
+
+    'preset' => env('CODEGUARDIAN_PRESET', 'balanced'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Custom Rules
+    |--------------------------------------------------------------------------
+    | Define project-specific detection rules without writing PHP. Each rule
+    | scans file contents with a regular expression and emits a finding.
+    |
+    |   'id'       (required) finding category / rule id
+    |   'title'    (required) short headline
+    |   'pattern'  (required) regex WITHOUT delimiters (case-insensitive by default)
+    |   'severity' critical|high|medium|low        (default: medium)
+    |   'message'  description shown on the finding  (default: title)
+    |   'fix'      recommendation text               (optional)
+    |   'paths'    only scan files whose path contains one of these (optional)
+    |   'exclude'  skip files whose path contains one of these       (optional)
+    */
+
+    'custom_rules' => [
+        // [
+        //     'id'       => 'no_env_in_code',
+        //     'title'    => 'env() used outside config',
+        //     'pattern'  => '(?<!config\\()\\benv\\(',
+        //     'severity' => 'medium',
+        //     'message'  => 'Calling env() outside config returns null when config is cached.',
+        //     'fix'      => 'Move to config/*.php and read via config().',
+        //     'exclude'  => ['config/'],
+        // ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Ignore / Suppression
     |--------------------------------------------------------------------------
     | Control noise without editing rules. Suppressed findings are removed

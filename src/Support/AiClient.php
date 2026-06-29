@@ -97,6 +97,8 @@ class AiClient
                 $this->lastResponseTruncated = true;
             }
 
+            UsageMeter::fromResponse((array) $data, 'openai', (string) ($cfg['model'] ?? 'gpt-4o'));
+
             return $data['choices'][0]['message']['content'] ?? '';
         } catch (GuzzleException $e) {
             throw new RuntimeException('OpenAI request failed: ' . $e->getMessage());
@@ -132,6 +134,8 @@ class AiClient
             if (($data['stop_reason'] ?? null) === 'max_tokens') {
                 $this->lastResponseTruncated = true;
             }
+
+            UsageMeter::fromResponse((array) $data, 'claude', (string) ($cfg['model'] ?? 'claude'));
 
             return $data['content'][0]['text'] ?? '';
         } catch (GuzzleException $e) {
@@ -182,6 +186,8 @@ class AiClient
             if (($data['candidates'][0]['finishReason'] ?? null) === 'MAX_TOKENS') {
                 $this->lastResponseTruncated = true;
             }
+
+            UsageMeter::fromResponse((array) $data, 'gemini', $model);
 
             return $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
         } catch (GuzzleException $e) {
