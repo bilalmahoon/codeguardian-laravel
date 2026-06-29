@@ -47,6 +47,12 @@ class ReportFormatter
             $saved[] = $sarifPath;
         }
 
+        if (in_array($format, ['junit', 'all'])) {
+            $junitPath = "{$base}.junit.xml";
+            File::put($junitPath, (new JUnitFormatter())->format($results));
+            $saved[] = $junitPath;
+        }
+
         return $saved;
     }
 

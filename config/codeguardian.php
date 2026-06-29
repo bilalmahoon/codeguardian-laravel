@@ -185,8 +185,11 @@ return [
         // Directory where generated tests are saved (relative to base_path())
         'tests_dir' => 'tests/CodeGuardian',
 
-        // Default report format: json | html | both
+        // Default report format: json | html | md | sarif | junit | both | all
         'format' => 'both',
+
+        // Append-only run history (powers `codeguardian:trend`). Absolute path.
+        'history_file' => storage_path('codeguardian/history.jsonl'),
     ],
 
     /*

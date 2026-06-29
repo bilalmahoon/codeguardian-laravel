@@ -118,7 +118,8 @@ php artisan codeguardian:analyze --format=html   # rich dashboard
 php artisan codeguardian:analyze --format=md     # Markdown — ideal for CI artifacts / PR comments
 php artisan codeguardian:analyze --format=both   # json + html (default)
 php artisan codeguardian:analyze --format=sarif  # SARIF 2.1.0 — code-scanning platforms
-php artisan codeguardian:analyze --format=all    # json + html + md + sarif
+php artisan codeguardian:analyze --format=junit  # JUnit XML — CI "Tests" panels
+php artisan codeguardian:analyze --format=all    # json + html + md + sarif + junit
 ```
 
 ---
@@ -151,6 +152,31 @@ codeguardian:
 ```
 
 **Azure DevOps:** publish the `*.sarif` as a build artifact; the *SARIF SAST Scans Tab* extension renders it.
+
+### JUnit — CI "Tests" panels
+
+`--format=junit` writes JUnit XML where every finding is a failed `<testcase>`, grouped into a `<testsuite>` per analyzer. This lights up the native test report UI in GitHub Actions test reporters, GitLab, Jenkins, CircleCI, Azure DevOps, and Bitbucket.
+
+```yaml
+# GitLab CI
+codeguardian:
+  script: php artisan codeguardian:analyze --format=junit --plain
+  artifacts:
+    reports:
+      junit: storage/codeguardian/reports/*.junit.xml
+```
+
+### Health trend over time
+
+Every `analyze` run appends a compact metric record (score, risk, severity counts, quality dimensions) to a history file. View the trajectory anytime:
+
+```bash
+php artisan codeguardian:trend            # table + direction + score sparkline
+php artisan codeguardian:trend --limit=50
+php artisan codeguardian:trend --json     # for dashboards
+```
+
+Disable recording for a single run with `--no-history`; change the location via `codeguardian.output.history_file`.
 
 ### Baseline / diff — fail only on new findings
 
@@ -458,6 +484,7 @@ Reports are saved to `storage/codeguardian/reports/`.
 php artisan codeguardian:doctor          # health check with fix suggestions
 php artisan codeguardian:doctor --json   # machine-readable
 php artisan codeguardian:rules           # list every detection rule + its state
+php artisan codeguardian:trend           # code-health trend across past runs
 ```
 
 See [Continuous Integration](#continuous-integration) for SARIF, baseline/diff, and CI wiring.

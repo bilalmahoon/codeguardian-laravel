@@ -13,6 +13,7 @@ use CodeGuardian\Laravel\Support\AiClient;
 use CodeGuardian\Laravel\Support\Baseline;
 use CodeGuardian\Laravel\Support\CodeScanner;
 use CodeGuardian\Laravel\Support\FindingFilter;
+use CodeGuardian\Laravel\Support\HistoryStore;
 use CodeGuardian\Laravel\Support\QualityScorer;
 use CodeGuardian\Laravel\Support\ReportFormatter;
 use CodeGuardian\Laravel\Support\RiskScorer;
@@ -30,7 +31,7 @@ class AnalyzeCommand extends Command
                             {--type=     : Project type: laravel or flutter (auto-detected if omitted)}
                             {--agents=   : Comma-separated agents: architect,security,performance,tech_debt (default: all)}
                             {--output=   : Output directory for reports (default: storage/codeguardian/reports)}
-                            {--format=   : Report format: json, html, md, sarif, both, or all (default: both)}
+                            {--format=   : Report format: json, html, md, sarif, junit, both, or all (default: both)}
                             {--mode=     : Engine mode: static | hybrid (static + Claude AI) | ai (Claude only)}
                             {--refactor  : After analysis, start interactive refactoring workflow}
                             {--severity=     : Filter findings by severity (csv): critical,high,medium,low}
@@ -42,6 +43,7 @@ class AnalyzeCommand extends Command
                             {--plain     : Disable the live progress UI (plain log output, ideal for CI)}
                             {--fail-on=  : Exit non-zero if any finding is at or above this severity: critical|high|medium|low}
                             {--no-suppress      : Ignore config/inline suppressions (show everything)}
+                            {--no-history       : Do not record this run in the trend history}
                             {--write-baseline   : Save the current findings as the baseline file}
                             {--against-baseline : Compare findings against the baseline (new vs existing vs fixed)}
                             {--baseline-file=   : Baseline file path (default: <project>/codeguardian-baseline.json)}
@@ -199,6 +201,15 @@ class AnalyzeCommand extends Command
             foreach ($paths as $p) {
                 $this->line("   → {$p}");
             }
+        }
+
+        // Record this run for trend tracking (codeguardian:trend). Opt-out via
+        // --no-history; skipped automatically with --no-report.
+        if (! $noReport && ! $this->option('no-history')) {
+            HistoryStore::fromConfig()->record($results, [
+                'scope' => $apiOpt ? "api:{$apiOpt}" : ($moduleOpt ? "module:{$moduleOpt}" : 'project'),
+                'mode'  => $mode,
+            ]);
         }
 
         $this->newLine();

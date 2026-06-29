@@ -17,6 +17,7 @@ use CodeGuardian\Laravel\Commands\PerformanceScanCommand;
 use CodeGuardian\Laravel\Commands\RefactorCommand;
 use CodeGuardian\Laravel\Commands\ReportCommand;
 use CodeGuardian\Laravel\Commands\RulesCommand;
+use CodeGuardian\Laravel\Commands\TrendCommand;
 use CodeGuardian\Laravel\Commands\SecurityScanCommand;
 use CodeGuardian\Laravel\Http\Middleware\Authorize;
 use CodeGuardian\Laravel\Support\CachedPhpParser;
@@ -83,6 +84,7 @@ class CodeGuardianServiceProvider extends ServiceProvider
                 ReportCommand::class,
                 DoctorCommand::class,
                 RulesCommand::class,
+                TrendCommand::class,
             ]);
         }
     }
