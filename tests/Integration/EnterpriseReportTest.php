@@ -103,4 +103,31 @@ class EnterpriseReportTest extends TestCase
         $this->assertStringContainsString('N+1 query', $md);
         $this->assertStringContainsString('Risk:', $md);
     }
+
+    /** @test */
+    public function test_save_writes_sarif_file(): void
+    {
+        $results = [
+            'project_name' => 'demo',
+            'all_findings' => [[
+                'category' => 'sql_injection', 'severity' => 'critical', 'title' => 'SQLi',
+                'file' => 'app/X.php', 'line_start' => 9, 'cwe' => 'CWE-89',
+            ]],
+            'summary' => ['total_issues' => 1, 'critical' => 1, 'high' => 0, 'medium' => 0, 'low' => 0],
+        ];
+
+        $dir   = sys_get_temp_dir() . '/cg-sarif-' . uniqid();
+        $paths = (new ReportFormatter())->save($results, $dir, 'sarif');
+
+        $this->assertNotEmpty($paths);
+        $this->assertStringEndsWith('.sarif', $paths[0]);
+        $doc = json_decode(file_get_contents($paths[0]), true);
+        $this->assertSame('2.1.0', $doc['version']);
+        $this->assertSame('sql_injection', $doc['runs'][0]['results'][0]['ruleId']);
+
+        foreach ($paths as $p) {
+            @unlink($p);
+        }
+        @rmdir($dir);
+    }
 }

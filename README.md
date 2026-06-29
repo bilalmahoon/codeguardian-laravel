@@ -117,7 +117,71 @@ php artisan codeguardian:analyze --format=json   # machine-readable
 php artisan codeguardian:analyze --format=html   # rich dashboard
 php artisan codeguardian:analyze --format=md     # Markdown — ideal for CI artifacts / PR comments
 php artisan codeguardian:analyze --format=both   # json + html (default)
-php artisan codeguardian:analyze --format=all    # json + html + md
+php artisan codeguardian:analyze --format=sarif  # SARIF 2.1.0 — code-scanning platforms
+php artisan codeguardian:analyze --format=all    # json + html + md + sarif
+```
+
+---
+
+## Continuous Integration
+
+CodeGuardian is built for CI: standard SARIF output, a baseline/diff mode that fails only on **new** regressions, and a `doctor` preflight check.
+
+### SARIF — GitHub / GitLab / Azure
+
+`--format=sarif` emits strict, schema-valid **SARIF 2.1.0**, ingested natively by GitHub code scanning, Azure DevOps (SARIF SAST Scans Tab), and GitLab. Severities map to SARIF `level` and the GitHub `security-severity` property; each result carries a stable `partialFingerprint` and CWE/OWASP `helpUri`s.
+
+**GitHub Actions:**
+
+```yaml
+- run: php artisan codeguardian:analyze --format=sarif --plain
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: storage/codeguardian/reports   # picks up *.sarif
+```
+
+**GitLab CI:**
+
+```yaml
+codeguardian:
+  script: php artisan codeguardian:analyze --format=sarif --plain
+  artifacts:
+    reports:
+      sast: storage/codeguardian/reports/*.sarif
+```
+
+**Azure DevOps:** publish the `*.sarif` as a build artifact; the *SARIF SAST Scans Tab* extension renders it.
+
+### Baseline / diff — fail only on new findings
+
+Adopt CodeGuardian on a legacy codebase without drowning in pre-existing debt. Record a baseline once, then fail CI only when a PR introduces **new** findings:
+
+```bash
+# once, on a clean main branch — commit the file
+php artisan codeguardian:analyze --write-baseline
+
+# in CI on every PR — non-zero exit only if NEW findings appear
+php artisan codeguardian:analyze --against-baseline --new-only --plain
+```
+
+Fingerprints are line-number-independent (category + file + title + normalised snippet), so unrelated edits above a finding never churn the baseline. The summary reports **new / existing / fixed** counts. Custom path via `--baseline-file=`.
+
+### Doctor — preflight diagnostics
+
+`codeguardian:doctor` verifies PHP version, required extensions, AI configuration, writable paths, the test runner, and dashboard safety — with an actionable fix for anything that's wrong. It returns a non-zero exit code on hard failures, so it can gate a pipeline.
+
+```bash
+php artisan codeguardian:doctor          # human-readable report
+php artisan codeguardian:doctor --json   # machine-readable for CI
+```
+
+```
+  ✓ PHP version          PHP 8.2.0 (>= 8.1.0)
+  ✓ Extension: tokenizer tokenizer is loaded
+  ✗ AI provider          Mode 'hybrid' requires an API key for 'claude', but none is set
+      ↳ Set CODEGUARDIAN_CLAUDE_KEY in your .env, or switch CODEGUARDIAN_MODE=static.
+  ⚠ Test runner          No PHPUnit/Pest binary found
+      ↳ Install PHPUnit so refactor can verify changes.
 ```
 
 ---
@@ -385,6 +449,17 @@ php artisan codeguardian:report --format=json
 ```
 
 Reports are saved to `storage/codeguardian/reports/`.
+
+---
+
+### Diagnose your setup
+
+```bash
+php artisan codeguardian:doctor          # health check with fix suggestions
+php artisan codeguardian:doctor --json   # machine-readable
+```
+
+See [Continuous Integration](#continuous-integration) for SARIF, baseline/diff, and CI wiring.
 
 ---
 

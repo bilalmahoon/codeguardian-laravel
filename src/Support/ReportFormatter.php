@@ -41,6 +41,12 @@ class ReportFormatter
             $saved[] = $mdPath;
         }
 
+        if (in_array($format, ['sarif', 'all'])) {
+            $sarifPath = "{$base}.sarif";
+            File::put($sarifPath, (new SarifFormatter())->format($results));
+            $saved[] = $sarifPath;
+        }
+
         return $saved;
     }
 

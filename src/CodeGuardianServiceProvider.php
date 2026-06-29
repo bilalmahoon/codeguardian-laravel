@@ -11,6 +11,7 @@ use CodeGuardian\Laravel\Analyzers\StaticOrchestrator;
 use CodeGuardian\Laravel\Analyzers\StaticTestGenerator;
 use CodeGuardian\Laravel\Analyzers\TechDebtAnalyzer;
 use CodeGuardian\Laravel\Commands\AnalyzeCommand;
+use CodeGuardian\Laravel\Commands\DoctorCommand;
 use CodeGuardian\Laravel\Commands\GenerateTestsCommand;
 use CodeGuardian\Laravel\Commands\PerformanceScanCommand;
 use CodeGuardian\Laravel\Commands\RefactorCommand;
@@ -79,6 +80,7 @@ class CodeGuardianServiceProvider extends ServiceProvider
                 GenerateTestsCommand::class,
                 RefactorCommand::class,
                 ReportCommand::class,
+                DoctorCommand::class,
             ]);
         }
     }

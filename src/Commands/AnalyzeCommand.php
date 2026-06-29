@@ -9,12 +9,14 @@ use CodeGuardian\Laravel\Console\ConsoleReporter;
 use CodeGuardian\Laravel\Console\ProgressFormat;
 use CodeGuardian\Laravel\PackageOrchestrator;
 use CodeGuardian\Laravel\Support\AiClient;
+use CodeGuardian\Laravel\Support\Baseline;
 use CodeGuardian\Laravel\Support\CodeScanner;
 use CodeGuardian\Laravel\Support\FindingFilter;
 use CodeGuardian\Laravel\Support\QualityScorer;
 use CodeGuardian\Laravel\Support\ReportFormatter;
 use CodeGuardian\Laravel\Support\RiskScorer;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\File;
 
 class AnalyzeCommand extends Command
 {
@@ -25,7 +27,7 @@ class AnalyzeCommand extends Command
                             {--type=     : Project type: laravel or flutter (auto-detected if omitted)}
                             {--agents=   : Comma-separated agents: architect,security,performance,tech_debt (default: all)}
                             {--output=   : Output directory for reports (default: storage/codeguardian/reports)}
-                            {--format=   : Report format: json, html, md, both, or all (default: both)}
+                            {--format=   : Report format: json, html, md, sarif, both, or all (default: both)}
                             {--mode=     : Engine mode: static | hybrid (static + Claude AI) | ai (Claude only)}
                             {--refactor  : After analysis, start interactive refactoring workflow}
                             {--severity=     : Filter findings by severity (csv): critical,high,medium,low}
@@ -35,6 +37,10 @@ class AnalyzeCommand extends Command
                             {--owasp=        : Filter findings by OWASP tag substring (csv), e.g. A03,A01}
                             {--cwe=          : Filter findings by CWE id substring (csv), e.g. CWE-89}
                             {--plain     : Disable the live progress UI (plain log output, ideal for CI)}
+                            {--write-baseline   : Save the current findings as the baseline file}
+                            {--against-baseline : Compare findings against the baseline (new vs existing vs fixed)}
+                            {--baseline-file=   : Baseline file path (default: <project>/codeguardian-baseline.json)}
+                            {--new-only         : With --against-baseline, only report/fail on newly introduced findings}
                             {--no-report : Print findings to console only, no files saved}';
 
     protected $description = 'Run a full CodeGuardian analysis — Principal SE + Senior DevOps + Senior QA level review';
@@ -140,6 +146,10 @@ class AnalyzeCommand extends Command
             $results['scores'] ?? []
         );
 
+        // Baseline / diff mode — write a baseline, or compare against one so CI
+        // can fail only on newly introduced findings. Fully opt-in.
+        $baselineNewCount = $this->handleBaseline($results, $path);
+
         $this->newLine();
         $this->printSummary($results, $mode);
 
@@ -166,11 +176,62 @@ class AnalyzeCommand extends Command
             $this->call('codeguardian:refactor', $args);
         }
 
+        // In --new-only baseline mode, CI should fail on ANY new finding.
+        if ($baselineNewCount !== null && $this->option('new-only')) {
+            return $baselineNewCount > 0 ? self::FAILURE : self::SUCCESS;
+        }
+
         $critical = $results['summary']['by_severity']['critical']
             ?? $results['summary']['critical']
             ?? 0;
 
         return $critical > 0 ? self::FAILURE : self::SUCCESS;
+    }
+
+    /**
+     * Handle baseline write/compare. Mutates $results in place (for --new-only)
+     * and returns the count of newly introduced findings (or null when not
+     * comparing against a baseline).
+     */
+    private function handleBaseline(array &$results, string $projectPath): ?int
+    {
+        $baselineFile = $this->option('baseline-file')
+            ?: rtrim($projectPath, '/\\') . '/codeguardian-baseline.json';
+
+        if ($this->option('write-baseline')) {
+            $doc = Baseline::create($results['all_findings'] ?? []);
+            File::ensureDirectoryExists(dirname($baselineFile));
+            File::put($baselineFile, json_encode($doc, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+            $this->newLine();
+            $this->info("  📌 Baseline written: {$baselineFile}  ({$doc['count']} fingerprint(s))");
+        }
+
+        if (! $this->option('against-baseline')) {
+            return null;
+        }
+
+        if (! is_file($baselineFile)) {
+            $this->newLine();
+            $this->warn("  ⚠ Baseline not found: {$baselineFile}");
+            $this->line('     Run once with --write-baseline to create it. Skipping diff.');
+            return null;
+        }
+
+        $doc  = json_decode((string) file_get_contents($baselineFile), true);
+        $doc  = is_array($doc) ? $doc : [];
+        $diff = Baseline::diff($results['all_findings'] ?? [], $doc);
+
+        $results['summary']['baseline'] = [
+            'new'      => count($diff['new']),
+            'existing' => count($diff['existing']),
+            'fixed'    => count($diff['fixed']),
+        ];
+
+        if ($this->option('new-only')) {
+            $results = Baseline::restrict($results, $diff['new']);
+        }
+
+        return count($diff['new']);
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -625,6 +686,19 @@ class AnalyzeCommand extends Command
         }
 
         $this->printQualityDimensions($results['quality'] ?? null);
+
+        if (isset($summary['baseline'])) {
+            $b = $summary['baseline'];
+            $this->newLine();
+            $this->info('  BASELINE DIFF:');
+            $color = ($b['new'] ?? 0) > 0 ? 'error' : 'info';
+            $this->{$color}("  🆕 New:      {$b['new']}");
+            $this->line("  ➖ Existing: {$b['existing']}");
+            $this->line("  ✅ Fixed:    {$b['fixed']}");
+            if ($this->option('new-only')) {
+                $this->line('  (reporting new findings only)');
+            }
+        }
 
         $this->info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     }
