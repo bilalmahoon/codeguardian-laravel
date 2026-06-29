@@ -87,6 +87,54 @@ class DashboardRoutesTest extends TestCase
     }
 
     /** @test */
+    public function test_fix_unknown_run_returns_404(): void
+    {
+        $this->startSession();
+        $this->post('/codeguardian/runs/nope/fix', ['_token' => csrf_token()])
+            ->assertNotFound();
+    }
+
+    /** @test */
+    public function test_fix_rejects_non_analyze_run(): void
+    {
+        $mock = \Mockery::mock(\CodeGuardian\Laravel\Support\RunStore::class);
+        $mock->shouldReceive('find')->andReturn([
+            'id' => 's1', 'type' => 'security', 'status' => 'completed', 'options' => [],
+        ]);
+        $mock->shouldNotReceive('start');
+        $this->app->instance(\CodeGuardian\Laravel\Support\RunStore::class, $mock);
+
+        $this->startSession();
+        $this->post('/codeguardian/runs/s1/fix', ['_token' => csrf_token()])
+            ->assertStatus(302);
+
+        $this->assertEquals('Only analyze runs can be auto-fixed.', session('cg_error'));
+    }
+
+    /** @test */
+    public function test_fix_starts_safe_refactor_reusing_scope(): void
+    {
+        $mock = \Mockery::mock(\CodeGuardian\Laravel\Support\RunStore::class);
+        $mock->shouldReceive('find')->with('a1')->andReturn([
+            'id' => 'a1', 'type' => 'analyze', 'status' => 'completed',
+            'options' => ['api' => 'v1/auth/login'],
+        ]);
+        $mock->shouldReceive('start')->once()->with(
+            'refactor',
+            'codeguardian:refactor',
+            \Mockery::on(fn($o) => ($o['mode'] ?? null) === 'auto'
+                && ($o['safe'] ?? false) === true
+                && ($o['api'] ?? null) === 'v1/auth/login'),
+            \Mockery::type('string')
+        )->andReturn('r1');
+        $this->app->instance(\CodeGuardian\Laravel\Support\RunStore::class, $mock);
+
+        $this->startSession();
+        $this->post('/codeguardian/runs/a1/fix', ['_token' => csrf_token()])
+            ->assertRedirect('/codeguardian/runs/r1');
+    }
+
+    /** @test */
     public function test_status_endpoint_404_for_unknown_run(): void
     {
         $this->getJson('/codeguardian/runs/nope/status')->assertNotFound();

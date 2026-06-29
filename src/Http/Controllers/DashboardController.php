@@ -193,6 +193,38 @@ class DashboardController
         return response($html, 200, ['Content-Type' => 'text/html']);
     }
 
+    /**
+     * "Fix these issues" — start a foolproof refactor run reusing the scope of a
+     * completed analyze run (same module/api/file, or whole project).
+     */
+    public function fix(string $id): RedirectResponse
+    {
+        $run = $this->runs->find($id);
+        if ($run === null) {
+            abort(404);
+        }
+
+        if (($run['type'] ?? null) !== 'analyze') {
+            return back()->with('cg_error', 'Only analyze runs can be auto-fixed.');
+        }
+
+        // Carry over the analysis scope; refactor understands module/api/file.
+        $sourceOptions = is_array($run['options'] ?? null) ? $run['options'] : [];
+        $options = ['mode' => 'auto', 'safe' => true];
+        foreach (['module', 'api', 'file'] as $scope) {
+            if (! empty($sourceOptions[$scope]) && is_string($sourceOptions[$scope])) {
+                $options[$scope] = $sourceOptions[$scope];
+            }
+        }
+
+        $spec  = self::OPERATIONS['refactor'];
+        $label = $this->buildLabel('Fix', $options);
+        $newId = $this->runs->start('refactor', $spec['artisan'], $options, $label);
+
+        return redirect()->route('codeguardian.show', ['id' => $newId])
+            ->with('cg_status', 'Started fixing the issues found by the analysis.');
+    }
+
     public function destroy(string $id): RedirectResponse
     {
         $this->runs->delete($id);

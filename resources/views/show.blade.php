@@ -35,6 +35,17 @@
             @endforeach
         </div>
         <p class="hint">Reports are also saved to <span class="mono">storage/{{ config('codeguardian.output.report_dir', 'codeguardian/reports') }}</span>.</p>
+
+        @if(($run['type'] ?? null) === 'analyze')
+            <div id="fix-cta" class="inline" style="margin-top:14px; {{ in_array($run['status'], ['completed','failed'], true) ? '' : 'display:none;' }}">
+                <form method="POST" action="{{ route('codeguardian.fix', ['id' => $run['id']]) }}"
+                      onsubmit="return confirm('Start fixing these issues? Changes are test-verified and auto-rolled-back if anything breaks.');">
+                    @csrf
+                    <button type="submit" class="btn">🔧 Fix these issues</button>
+                </form>
+                <span class="hint">Runs a safe, test-verified refactor over the same scope.</span>
+            </div>
+        @endif
     </div>
 
     <form method="POST" action="{{ route('codeguardian.destroy', ['id' => $run['id']]) }}"
@@ -99,6 +110,8 @@
                     if (data.finished) {
                         finished = true;
                         indicator.textContent = data.status === 'completed' ? '✔ finished' : '✖ failed (exit ' + data.exit_code + ')';
+                        var fixCta = document.getElementById('fix-cta');
+                        if (fixCta) fixCta.style.display = '';
                         return;
                     }
                     indicator.textContent = '● running…';

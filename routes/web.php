@@ -11,4 +11,5 @@ Route::post('/runs', [DashboardController::class, 'store'])->name('codeguardian.
 Route::get('/runs/{id}', [DashboardController::class, 'show'])->name('codeguardian.show');
 Route::get('/runs/{id}/status', [DashboardController::class, 'status'])->name('codeguardian.status');
 Route::get('/runs/{id}/report', [DashboardController::class, 'report'])->name('codeguardian.report');
+Route::post('/runs/{id}/fix', [DashboardController::class, 'fix'])->name('codeguardian.fix');
 Route::delete('/runs/{id}', [DashboardController::class, 'destroy'])->name('codeguardian.destroy');

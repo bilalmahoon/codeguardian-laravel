@@ -378,7 +378,39 @@ php artisan codeguardian:analyze --no-report
 
 # Analyze then immediately start interactive refactoring
 php artisan codeguardian:analyze --refactor
+
+# Analyze, then automatically FIX the issues (safe mode: test-verified, auto-rollback)
+php artisan codeguardian:analyze --fix
 ```
+
+---
+
+### Fixing issues after analysis
+
+When `analyze` finishes and finds issues, it offers to fix them right there — no need to remember a second command:
+
+```
+✗ 12 issues found (2 critical, 5 high, …)
+📄 Reports saved: …
+
+  🔧 CodeGuardian can attempt to FIX these issues for you.
+     Safe mode: every change is verified by tests and automatically
+     rolled back if it would break anything. Backups are kept.
+
+  Do you want to proceed with fixing now? (yes/no) [no]:
+```
+
+Answer **yes** and it runs the full refactor pipeline (write tests → refactor → verify → auto-rollback on regression) over the same scope you analyzed. You can also skip the prompt:
+
+| Flag | Behaviour |
+|---|---|
+| `--fix` | Auto-fix in **safe mode** (no prompts, test-verified, auto-rollback) |
+| `--refactor` | Start the **interactive** refactoring workflow |
+| *(neither)* | Interactive runs get the "fix now?" prompt; CI / `--no-interaction` skips it |
+
+The prompt only appears in an interactive terminal, so CI runs are never blocked.
+
+**In the web dashboard**, a completed analyze run shows a **🔧 Fix these issues** button that launches the same safe refactor over the analyzed scope.
 
 ---
 

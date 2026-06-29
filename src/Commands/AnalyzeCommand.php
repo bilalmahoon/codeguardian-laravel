@@ -34,6 +34,7 @@ class AnalyzeCommand extends Command
                             {--format=   : Report format: json, html, md, sarif, junit, both, or all (default: both)}
                             {--mode=     : Engine mode: static | hybrid (static + Claude AI) | ai (Claude only)}
                             {--refactor  : After analysis, start interactive refactoring workflow}
+                            {--fix       : After analysis, automatically fix the issues (safe mode: test-verified, auto-rollback)}
                             {--severity=     : Filter findings by severity (csv): critical,high,medium,low}
                             {--min-severity= : Keep only findings at or above this severity}
                             {--category=     : Filter findings by category substring (csv), e.g. sql_injection,n_plus_one}
@@ -214,12 +215,7 @@ class AnalyzeCommand extends Command
 
         $this->newLine();
 
-        if ($this->option('refactor') && ($results['summary']['total_issues'] ?? 0) > 0) {
-            $args = ['--path' => $path, '--type' => $type, '--mode' => 'interactive'];
-            if ($moduleOpt) $args['--module'] = $moduleOpt;
-            if ($apiOpt)    $args['--api']    = $apiOpt;
-            $this->call('codeguardian:refactor', $args);
-        }
+        $this->maybeOfferFix($results, $path, $type, $moduleOpt, $apiOpt, $noReport);
 
         // Explicit CI gate: fail if any finding meets the --fail-on threshold.
         $failOn = $this->option('fail-on');
@@ -243,6 +239,70 @@ class AnalyzeCommand extends Command
             ?? 0;
 
         return $critical > 0 ? self::FAILURE : self::SUCCESS;
+    }
+
+    /**
+     * After the report, let the user fix the issues. Triggered by:
+     *   --fix       → automatic safe-mode fix (test-verified, auto-rollback)
+     *   --refactor  → interactive refactoring workflow (legacy behaviour)
+     *   otherwise   → an interactive prompt offering to fix now (the "button")
+     */
+    private function maybeOfferFix(
+        array $results,
+        string $path,
+        string $type,
+        ?string $moduleOpt,
+        ?string $apiOpt,
+        bool $noReport
+    ): void {
+        $hasIssues = (int) ($results['summary']['total_issues'] ?? 0) > 0;
+        if (! $hasIssues) {
+            return;
+        }
+
+        $explicitFix      = (bool) $this->option('fix');
+        $explicitRefactor = (bool) $this->option('refactor');
+
+        $wantFix = $explicitFix || $explicitRefactor;
+        $useSafe = $explicitFix; // --fix implies foolproof, prompt-free fixing
+
+        // No explicit flag → offer it interactively (the "fix these issues?" button).
+        if (! $wantFix && ! $noReport && $this->input->isInteractive()) {
+            $this->newLine();
+            $this->warn('  🔧 CodeGuardian can attempt to FIX these issues for you.');
+            $this->line('     Safe mode: every change is verified by tests and automatically');
+            $this->line('     rolled back if it would break anything. Backups are kept.');
+            $this->newLine();
+
+            if ($this->confirm('  Do you want to proceed with fixing now?', false)) {
+                $wantFix = true;
+                $useSafe = true;
+            } else {
+                $cmd = '  php artisan codeguardian:refactor';
+                if ($moduleOpt)   { $cmd .= " --module={$moduleOpt}"; }
+                elseif ($apiOpt)  { $cmd .= " --api={$apiOpt}"; }
+                $this->line('  Skipped. You can fix later with:');
+                $this->line("  {$cmd} --safe");
+            }
+        }
+
+        if (! $wantFix) {
+            return;
+        }
+
+        $this->newLine();
+        $this->info('  ▶ Starting refactoring workflow...');
+
+        $args = ['--path' => $path, '--type' => $type];
+        if ($useSafe) {
+            $args['--safe'] = true;
+        } else {
+            $args['--mode'] = 'interactive';
+        }
+        if ($moduleOpt) { $args['--module'] = $moduleOpt; }
+        if ($apiOpt)    { $args['--api']    = $apiOpt; }
+
+        $this->call('codeguardian:refactor', $args);
     }
 
     /**
