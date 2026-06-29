@@ -55,6 +55,37 @@ class NewCommandsTest extends TestCase
             ->assertExitCode(1);
     }
 
+    public function test_explain_known_rule(): void
+    {
+        $this->artisan('codeguardian:explain n_plus_one')->assertExitCode(0);
+    }
+
+    public function test_config_check_passes_on_defaults(): void
+    {
+        $this->artisan('codeguardian:config-check')->assertExitCode(0);
+    }
+
+    public function test_config_check_fails_on_bad_mode(): void
+    {
+        config()->set('codeguardian.mode', 'turbo');
+        $this->artisan('codeguardian:config-check')->assertExitCode(1);
+    }
+
+    public function test_notify_dry_run_prints_payload(): void
+    {
+        $dir = $this->dir . '/reports';
+        @mkdir($dir, 0777, true);
+        file_put_contents($dir . '/report.json', json_encode([
+            'project_name' => 'demo',
+            'overall_score' => 80,
+            'grade' => 'B',
+            'summary' => ['total_issues' => 0],
+        ]));
+
+        $this->artisan("codeguardian:notify --report={$dir}/report.json --format=generic --dry-run")
+            ->assertExitCode(0);
+    }
+
     public function test_analyze_quality_gate_fails_when_budget_breached(): void
     {
         config()->set('codeguardian.gates', ['max_total' => 0]);

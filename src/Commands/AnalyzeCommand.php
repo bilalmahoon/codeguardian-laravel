@@ -54,6 +54,8 @@ class AnalyzeCommand extends Command
                             {--plain     : Disable the live progress UI (plain log output, ideal for CI)}
                             {--parallel        : Run analyzers in parallel processes (faster on large codebases)}
                             {--no-parallel     : Force sequential analysis even if parallel is enabled in config}
+                            {--cache           : Reuse cached results when files are unchanged (content-addressed)}
+                            {--no-cache        : Ignore the static result cache for this run}
                             {--gate            : Enforce the quality gates/budgets from config (codeguardian.gates)}
                             {--fail-on=  : Exit non-zero if any finding is at or above this severity: critical|high|medium|low}
                             {--no-suppress      : Ignore config/inline suppressions (show everything)}
@@ -592,6 +594,18 @@ class AnalyzeCommand extends Command
         $requestedAgents = $this->resolveRequestedAgents();
 
         $options = $this->buildAnalyzerOptions($requestedAgents, $files);
+
+        // Content-addressed result cache: an unchanged tree returns instantly.
+        $cache    = $this->staticCache();
+        $cacheKey = $cache !== null ? \CodeGuardian\Laravel\Support\StaticResultCache::key($files, $options) : null;
+        if ($cache !== null && $cacheKey !== null) {
+            $hit = $cache->get($cacheKey);
+            if ($hit !== null) {
+                $this->line('  ⚡ Served from cache (no file changes since last scan).');
+                return $hit;
+            }
+        }
+
         // Non-live path can safely fan analyzers out across processes.
         $options['parallel'] = $this->shouldRunParallel();
 
@@ -602,9 +616,14 @@ class AnalyzeCommand extends Command
             $this->line('  ⚙  Parallel mode enabled (multi-process).');
         }
 
-        $result = $orchestrator->analyze($files, $options, $scanPath);
+        $result     = $orchestrator->analyze($files, $options, $scanPath);
+        $normalized = $this->normalizeStaticResult($result, $scanPath);
 
-        return $this->normalizeStaticResult($result, $scanPath);
+        if ($cache !== null && $cacheKey !== null) {
+            $cache->put($cacheKey, $normalized);
+        }
+
+        return $normalized;
     }
 
     /**
@@ -641,6 +660,26 @@ class AnalyzeCommand extends Command
         }
         $want = (bool) $this->option('parallel') || (bool) config('codeguardian.analysis.parallel', false);
         return $want && \CodeGuardian\Laravel\Support\ParallelRunner::available();
+    }
+
+    /**
+     * Resolve the static result cache, honouring --cache / --no-cache overrides.
+     * Returns null when caching is disabled for this run.
+     */
+    private function staticCache(): ?\CodeGuardian\Laravel\Support\StaticResultCache
+    {
+        if ($this->option('no-cache')) {
+            return null;
+        }
+        $cache = \CodeGuardian\Laravel\Support\StaticResultCache::fromConfig();
+        if ($this->option('cache') && ! $cache->enabled()) {
+            // --cache forces it on for this run even if config disables it.
+            $cache = new \CodeGuardian\Laravel\Support\StaticResultCache(
+                (string) config('codeguardian.cache.static_dir', storage_path('codeguardian/cache/static')),
+                true
+            );
+        }
+        return $cache->enabled() ? $cache : null;
     }
 
     /**

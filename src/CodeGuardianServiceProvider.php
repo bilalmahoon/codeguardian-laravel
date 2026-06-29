@@ -15,16 +15,20 @@ use CodeGuardian\Laravel\Analyzers\TechDebtAnalyzer;
 use CodeGuardian\Laravel\Commands\AnalyzeCommand;
 use CodeGuardian\Laravel\Commands\AuditCommand;
 use CodeGuardian\Laravel\Commands\CommentCommand;
+use CodeGuardian\Laravel\Commands\ConfigCheckCommand;
 use CodeGuardian\Laravel\Commands\DoctorCommand;
+use CodeGuardian\Laravel\Commands\ExplainCommand;
 use CodeGuardian\Laravel\Commands\FixCommand;
 use CodeGuardian\Laravel\Commands\GraphCommand;
 use CodeGuardian\Laravel\Commands\InitCommand;
 use CodeGuardian\Laravel\Commands\GenerateTestsCommand;
+use CodeGuardian\Laravel\Commands\NotifyCommand;
 use CodeGuardian\Laravel\Commands\PerformanceScanCommand;
 use CodeGuardian\Laravel\Commands\RefactorCommand;
 use CodeGuardian\Laravel\Commands\ReportCommand;
 use CodeGuardian\Laravel\Commands\ReviewCommand;
 use CodeGuardian\Laravel\Commands\RulesCommand;
+use CodeGuardian\Laravel\Commands\TestImpactCommand;
 use CodeGuardian\Laravel\Commands\TrendCommand;
 use CodeGuardian\Laravel\Commands\SecurityScanCommand;
 use CodeGuardian\Laravel\Commands\WatchCommand;
@@ -105,6 +109,10 @@ class CodeGuardianServiceProvider extends ServiceProvider
                 WatchCommand::class,
                 GraphCommand::class,
                 ReviewCommand::class,
+                ExplainCommand::class,
+                NotifyCommand::class,
+                ConfigCheckCommand::class,
+                TestImpactCommand::class,
             ]);
         }
     }

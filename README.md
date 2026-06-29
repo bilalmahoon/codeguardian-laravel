@@ -680,6 +680,49 @@ php artisan codeguardian:watch --path=app --interval=2 --agents=security,perform
 
 Polls for file changes and runs a fast, scoped incremental analysis on each save.
 
+### Static result cache (instant re-runs)
+
+```bash
+php artisan codeguardian:analyze --cache         # reuse results when the tree is unchanged
+php artisan codeguardian:analyze --no-cache      # force a fresh scan
+```
+
+Content-addressed: the cache key is a hash of the scanned file contents plus the enabled analyzers, so a hit is always correct — change any file and it re-runs. Enable globally with `CODEGUARDIAN_CACHE_STATIC=true`.
+
+### Explain a rule
+
+```bash
+php artisan codeguardian:explain n_plus_one      # what it is, why it matters, how to fix
+php artisan codeguardian:explain sql_injection --ai   # + an AI deep-dive with examples
+```
+
+### Test impact analysis
+
+```bash
+php artisan codeguardian:test-impact                     # which tests your changes affect
+php artisan codeguardian:test-impact --since=origin/main
+vendor/bin/phpunit --filter="$(php artisan codeguardian:test-impact --filter)"
+```
+
+Maps changed files to the tests that exercise them (by reference + naming convention) and emits a ready-to-use PHPUnit `--filter`, so CI runs a fast, relevant subset.
+
+### Chat notifications
+
+```bash
+php artisan codeguardian:notify --format=slack   # post the latest report to Slack
+php artisan codeguardian:notify --format=teams --url=https://...
+php artisan codeguardian:notify --dry-run        # preview the payload
+```
+
+Set a default endpoint via `CODEGUARDIAN_WEBHOOK_URL`. Supports Slack, Microsoft Teams, and a generic JSON shape.
+
+### Validate your config
+
+```bash
+php artisan codeguardian:config-check            # catch wrong mode/provider, bad gates, malformed custom rules
+php artisan codeguardian:config-check --json     # machine-readable; non-zero exit on hard errors
+```
+
 ### Tuning presets
 
 ```bash

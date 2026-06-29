@@ -236,6 +236,26 @@ return [
         // Seconds an entry stays valid (0 = never expires; clear manually).
         'ttl'        => env('CODEGUARDIAN_CACHE_TTL', 0),
         'dir'        => storage_path('codeguardian/cache/ai'),
+
+        // Static-analysis result cache (content-addressed). When on, an
+        // unchanged file tree returns the previous result instantly. Safe by
+        // design (the key is a hash of file contents). Enable per-run with
+        // --cache, or globally here. Bypass with --no-cache.
+        'static_enabled' => env('CODEGUARDIAN_CACHE_STATIC', false),
+        'static_dir'     => storage_path('codeguardian/cache/static'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Notifications
+    |--------------------------------------------------------------------------
+    | Webhook endpoint for `codeguardian:notify` (Slack / Microsoft Teams / a
+    | generic JSON receiver). Override the URL per-run with --url and the shape
+    | with --format=slack|teams|generic.
+    */
+
+    'notifications' => [
+        'webhook' => env('CODEGUARDIAN_WEBHOOK_URL', ''),
     ],
 
     /*
