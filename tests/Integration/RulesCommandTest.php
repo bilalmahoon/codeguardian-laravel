@@ -29,4 +29,19 @@ class RulesCommandTest extends TestCase
         $this->artisan('codeguardian:rules --json --group=performance')->assertExitCode(0);
         $this->artisan('codeguardian:rules --enabled-only')->assertExitCode(0);
     }
+
+    /** @test */
+    public function test_rules_detail_for_known_rule(): void
+    {
+        $this->artisan('codeguardian:rules sql_injection')
+            ->expectsOutputToContain('Why it matters')
+            ->expectsOutputToContain('How to fix')
+            ->assertExitCode(0);
+    }
+
+    /** @test */
+    public function test_rules_detail_unknown_rule_fails(): void
+    {
+        $this->artisan('codeguardian:rules not_a_real_rule')->assertExitCode(1);
+    }
 }

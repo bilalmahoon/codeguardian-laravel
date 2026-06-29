@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\File;
 
 class ReportFormatter
 {
+
     /**
      * Save report in the requested format(s).
      *
@@ -223,6 +224,9 @@ class ReportFormatter
   .finding-meta  { margin-top: .5rem; font-size: .8rem; color: #94a3b8; display: grid; gap: .15rem; }
   .finding-meta strong { color: #cbd5e1; }
   .finding-fix   { margin-top: .5rem; font-size: .85rem; background: #0f172a; padding: .75rem; border-radius: .4rem; }
+  .finding-doc   { margin-top: .4rem; font-size: .8rem; }
+  .finding-doc a { color: #7dd3fc; text-decoration: none; }
+  .finding-doc a:hover { text-decoration: underline; }
   pre { background: #0f172a; padding: 1rem; border-radius: .5rem; overflow-x: auto; font-size: .8rem; color: #93c5fd; margin-top: .5rem; }
   .test-card { background: #1e293b; border-radius: .5rem; padding: 1rem; margin-bottom: .75rem; }
   .test-card h3 { font-size: .9rem; font-weight: 700; color: #38bdf8; margin-bottom: .5rem; }
@@ -460,6 +464,7 @@ ROW;
                 }
 
                 $fixHtml = $rec ? "<div class=\"finding-fix\">💡 {$rec}</div>" : '';
+                $docHtml = $this->renderFindingDoc($f);
 
                 $tagsHtml  = $this->renderFindingTags($f);
                 $metaHtml  = $this->renderFindingMeta($f);
@@ -476,6 +481,7 @@ ROW;
   {$metaHtml}
   {$codeSnippet}
   {$fixHtml}
+  {$docHtml}
 </div>
 CARD;
             }
@@ -484,6 +490,26 @@ CARD;
         }
 
         return $html;
+    }
+
+    /** "Learn more" doc link for a finding whose rule has documentation. */
+    private function renderFindingDoc(array $f): string
+    {
+        $cat = (string) ($f['category'] ?? '');
+        if ($cat === '' || ! RuleDocs::has($cat)) {
+            return '';
+        }
+
+        $doc = RuleDocs::for($cat);
+        $ref = $doc['refs'][0] ?? '';
+        $label = e($doc['title']);
+
+        if ($ref === '') {
+            return "<div class=\"finding-doc\">📚 {$label} — see <span class=\"mono\">php artisan codeguardian:rules {$doc['id']}</span></div>";
+        }
+
+        $url = e($ref);
+        return "<div class=\"finding-doc\"><a href=\"{$url}\" target=\"_blank\" rel=\"noopener\">📚 Learn more: {$label}</a></div>";
     }
 
     /** Small pill tags for security taxonomy / confidence (CWE, OWASP, confidence). */

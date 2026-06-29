@@ -135,6 +135,30 @@ class DashboardRoutesTest extends TestCase
     }
 
     /** @test */
+    public function test_fix_with_selected_files_uses_files_option(): void
+    {
+        $mock = \Mockery::mock(\CodeGuardian\Laravel\Support\RunStore::class);
+        $mock->shouldReceive('find')->with('a2')->andReturn([
+            'id' => 'a2', 'type' => 'analyze', 'status' => 'completed', 'options' => [],
+        ]);
+        $mock->shouldReceive('start')->once()->with(
+            'refactor',
+            'codeguardian:refactor',
+            \Mockery::on(fn($o) => ($o['safe'] ?? false) === true
+                && ($o['files'] ?? '') === 'app/A.php,app/B.php'
+                && ! isset($o['api'])),
+            \Mockery::type('string')
+        )->andReturn('r2');
+        $this->app->instance(\CodeGuardian\Laravel\Support\RunStore::class, $mock);
+
+        $this->startSession();
+        $this->post('/codeguardian/runs/a2/fix', [
+            '_token' => csrf_token(),
+            'files'  => ['app/A.php', '../../etc/passwd', 'app/B.php'], // traversal dropped
+        ])->assertRedirect('/codeguardian/runs/r2');
+    }
+
+    /** @test */
     public function test_status_endpoint_404_for_unknown_run(): void
     {
         $this->getJson('/codeguardian/runs/nope/status')->assertNotFound();

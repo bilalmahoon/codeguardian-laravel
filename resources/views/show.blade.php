@@ -37,13 +37,30 @@
         <p class="hint">Reports are also saved to <span class="mono">storage/{{ config('codeguardian.output.report_dir', 'codeguardian/reports') }}</span>.</p>
 
         @if(($run['type'] ?? null) === 'analyze')
-            <div id="fix-cta" class="inline" style="margin-top:14px; {{ in_array($run['status'], ['completed','failed'], true) ? '' : 'display:none;' }}">
+            <div id="fix-cta" style="margin-top:16px; {{ in_array($run['status'], ['completed','failed'], true) ? '' : 'display:none;' }}">
                 <form method="POST" action="{{ route('codeguardian.fix', ['id' => $run['id']]) }}"
-                      onsubmit="return confirm('Start fixing these issues? Changes are test-verified and auto-rolled-back if anything breaks.');">
+                      onsubmit="return confirm('Start fixing? Changes are test-verified and auto-rolled-back if anything breaks.');">
                     @csrf
-                    <button type="submit" class="btn">🔧 Fix these issues</button>
+
+                    @if(!empty($files))
+                        <h3 style="margin:0 0 8px;">Fix specific files</h3>
+                        <p class="hint" style="margin-top:0;">Select files to refactor, or leave all unchecked to fix the whole analyzed scope.</p>
+                        <div style="max-height:280px; overflow:auto; border:1px solid #1e293b; border-radius:8px; padding:6px;">
+                            @foreach($files as $f)
+                                <label style="display:flex; align-items:center; gap:8px; padding:5px 6px;">
+                                    <input type="checkbox" name="files[]" value="{{ $f['file'] }}">
+                                    <span class="mono" style="flex:1; word-break:break-all;">{{ $f['file'] }}</span>
+                                    <span class="pill type">{{ $f['count'] }}</span>
+                                </label>
+                            @endforeach
+                        </div>
+                    @endif
+
+                    <div class="inline" style="margin-top:12px;">
+                        <button type="submit" class="btn">🔧 Fix {{ !empty($files) ? 'selected (or all)' : 'these issues' }}</button>
+                        <span class="hint">Safe mode: test-verified, auto-rollback on regression.</span>
+                    </div>
                 </form>
-                <span class="hint">Runs a safe, test-verified refactor over the same scope.</span>
             </div>
         @endif
     </div>

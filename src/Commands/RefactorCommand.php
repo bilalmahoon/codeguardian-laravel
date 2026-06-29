@@ -87,6 +87,7 @@ class RefactorCommand extends Command
                             {--module=            : Refactor a specific module only (e.g. User, Order)}
                             {--api=               : Refactor APIs matching this filter (e.g. GET:/api/users)}
                             {--file=              : Refactor a single file + its dependency chain (e.g. app/Services/AuthService.php)}
+                            {--files=             : Refactor several specific files (comma-separated paths)}
                             {--type=              : Project type: laravel or flutter}
                             {--mode=              : Execution mode: interactive (default) or auto}
                             {--safe                 : Foolproof mode — auto-rollback any file whose refactor introduces a NEW test failure (no prompts)}
@@ -263,7 +264,7 @@ class RefactorCommand extends Command
         // deep-refactoring pass is the whole point — the built-in static engine
         // is intentionally basic. So we must NOT stop at "0 static issues"; let
         // Claude perform its expert review. Only bail early for unscoped/no-AI runs.
-        $isScopedTarget = (bool) ($this->option('api') || $this->option('file'));
+        $isScopedTarget = (bool) ($this->option('api') || $this->option('file') || $this->option('files'));
         $aiWillReview   = $this->aiEnabled && $isScopedTarget;
 
         if ($totalIssues === 0 && ! $aiWillReview) {
@@ -393,6 +394,15 @@ class RefactorCommand extends Command
         $moduleOpt = $this->option('module');
         $apiOpt    = $this->option('api');
         $fileOpt   = $this->option('file');
+        $filesOpt  = $this->option('files');
+
+        if ($filesOpt) {
+            $list = array_values(array_filter(array_map('trim', explode(',', (string) $filesOpt)), fn($p) => $p !== ''));
+            if (count($list) === 1) {
+                return ['type' => 'file', 'value' => $list[0], 'label' => "File: {$list[0]}"];
+            }
+            return ['type' => 'files', 'value' => $list, 'label' => 'Files: ' . count($list) . ' selected'];
+        }
 
         if ($fileOpt) {
             return ['type' => 'file', 'value' => $fileOpt, 'label' => "File: {$fileOpt}"];
@@ -456,6 +466,7 @@ class RefactorCommand extends Command
             'module' => $scanner->buildContextForModule($this->projectRoot, $scope['value']),
             'api'    => $scanner->buildContextForApi($this->projectRoot, $scope['value']),
             'file'   => $scanner->buildContextForFile($this->projectRoot, $scope['value']),
+            'files'  => $scanner->buildContextForFiles($this->projectRoot, $scope['value']),
             default  => $scanner->buildContext($this->projectRoot, $this->projectType),
         };
     }
@@ -576,7 +587,7 @@ class RefactorCommand extends Command
         // static analysis found nothing. The deep-chain pass will run AI on the traced
         // dependency layer regardless. Without a scoped target, an empty findings list
         // means there is nothing to do.
-        $isScopedTarget = $this->option('api') || $this->option('file');
+        $isScopedTarget = $this->option('api') || $this->option('file') || $this->option('files');
         $hasApiScope    = $this->aiEnabled && $isScopedTarget && ! empty($context['files']);
 
         if (empty($findingsByFile) && ! $hasApiScope) {

@@ -155,6 +155,7 @@ class DashboardController
         return response()->view('codeguardian::show', [
             'run'     => $run,
             'reports' => $this->runs->reportsFor($run),
+            'files'   => ($run['type'] ?? null) === 'analyze' ? $this->runs->reportFiles($run) : [],
         ]);
     }
 
@@ -194,10 +195,11 @@ class DashboardController
     }
 
     /**
-     * "Fix these issues" — start a foolproof refactor run reusing the scope of a
-     * completed analyze run (same module/api/file, or whole project).
+     * "Fix these issues" — start a foolproof refactor run for a completed analyze
+     * run. Fixes the specific files the user selected, or (if none) the whole
+     * analyzed scope (same module/api/file, or the whole project).
      */
-    public function fix(string $id): RedirectResponse
+    public function fix(Request $request, string $id): RedirectResponse
     {
         $run = $this->runs->find($id);
         if ($run === null) {
@@ -208,21 +210,52 @@ class DashboardController
             return back()->with('cg_error', 'Only analyze runs can be auto-fixed.');
         }
 
-        // Carry over the analysis scope; refactor understands module/api/file.
-        $sourceOptions = is_array($run['options'] ?? null) ? $run['options'] : [];
         $options = ['mode' => 'auto', 'safe' => true];
-        foreach (['module', 'api', 'file'] as $scope) {
-            if (! empty($sourceOptions[$scope]) && is_string($sourceOptions[$scope])) {
-                $options[$scope] = $sourceOptions[$scope];
+
+        // Prefer explicitly selected files (selective fix).
+        $selected = $this->safeFiles((array) $request->input('files', []));
+        if ($selected !== []) {
+            $options['files'] = implode(',', $selected);
+            $label = 'Fix: ' . count($selected) . ' selected file(s)';
+        } else {
+            // Otherwise carry over the analysis scope (module/api/file).
+            $sourceOptions = is_array($run['options'] ?? null) ? $run['options'] : [];
+            foreach (['module', 'api', 'file'] as $scope) {
+                if (! empty($sourceOptions[$scope]) && is_string($sourceOptions[$scope])) {
+                    $options[$scope] = $sourceOptions[$scope];
+                }
             }
+            $label = $this->buildLabel('Fix', $options);
         }
 
         $spec  = self::OPERATIONS['refactor'];
-        $label = $this->buildLabel('Fix', $options);
         $newId = $this->runs->start('refactor', $spec['artisan'], $options, $label);
 
         return redirect()->route('codeguardian.show', ['id' => $newId])
             ->with('cg_status', 'Started fixing the issues found by the analysis.');
+    }
+
+    /**
+     * Sanitise a list of selected file paths: relative only, no traversal.
+     *
+     * @param array<int,mixed> $files
+     * @return array<int,string>
+     */
+    private function safeFiles(array $files): array
+    {
+        $clean = [];
+        foreach ($files as $file) {
+            if (! is_string($file)) {
+                continue;
+            }
+            $path = ltrim(str_replace('\\', '/', trim($file)), '/');
+            if ($path === '' || str_contains($path, '..')) {
+                continue;
+            }
+            $clean[$path] = true;
+        }
+
+        return array_keys($clean);
     }
 
     public function destroy(string $id): RedirectResponse

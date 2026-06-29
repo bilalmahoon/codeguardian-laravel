@@ -233,6 +233,43 @@ class RunStore
         return $reports;
     }
 
+    /**
+     * Distinct files (with finding counts) from a run's JSON report, most issues
+     * first. Powers the dashboard "fix selected files" UI.
+     *
+     * @param array<string,mixed> $meta
+     * @return array<int,array{file:string,count:int}>
+     */
+    public function reportFiles(array $meta): array
+    {
+        foreach ($this->reportsFor($meta) as $report) {
+            if ($report['ext'] !== 'json') {
+                continue;
+            }
+            $data = json_decode((string) @file_get_contents($report['path']), true);
+            if (! is_array($data)) {
+                continue;
+            }
+
+            $counts = [];
+            foreach (($data['all_findings'] ?? []) as $f) {
+                $file = (string) ($f['file'] ?? '');
+                if ($file !== '') {
+                    $counts[$file] = ($counts[$file] ?? 0) + 1;
+                }
+            }
+            arsort($counts);
+
+            $out = [];
+            foreach ($counts as $file => $count) {
+                $out[] = ['file' => $file, 'count' => $count];
+            }
+            return $out;
+        }
+
+        return [];
+    }
+
     public function reportHtml(string $id): ?string
     {
         $meta = $this->readMeta($id);

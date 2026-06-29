@@ -163,6 +163,28 @@ Don't want to wire up SARIF upload? Pass `--annotate` (auto-enabled when running
 
 Severities map to `::error` (critical/high), `::warning` (medium), and `::notice` (low); the most severe findings are emitted first (capped to avoid noise).
 
+### PR / MR summary comment
+
+`codeguardian:comment` posts a concise Markdown summary (quality + risk scores, a severity table, and the top findings) as a comment on the current **GitHub PR** or **GitLab MR**. The platform is auto-detected from CI env vars; force it with `--platform=`. A hidden marker is embedded so a poster can locate and update its previous comment instead of stacking new ones.
+
+```bash
+php artisan codeguardian:comment --dry-run     # preview the body, post nothing (safe anywhere)
+php artisan codeguardian:comment               # auto-detect platform + post
+php artisan codeguardian:comment --platform=gitlab --mr=42
+```
+
+- **GitHub** uses the `gh` CLI (install + authenticate via `GH_TOKEN`).
+- **GitLab** uses the REST API; set `CODEGUARDIAN_GITLAB_TOKEN` (or rely on `CI_JOB_TOKEN`) — `CI_PROJECT_ID` and the MR IID are read from the pipeline.
+- It reads the latest JSON report by default, or pass `--report=path/to/report.json`.
+
+```yaml
+# GitHub Actions
+- run: php artisan codeguardian:analyze --format=json --plain
+- run: php artisan codeguardian:comment
+  env:
+    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
 ### JUnit — CI "Tests" panels
 
 `--format=junit` writes JUnit XML where every finding is a failed `<testcase>`, grouped into a `<testsuite>` per analyzer. This lights up the native test report UI in GitHub Actions test reporters, GitLab, Jenkins, CircleCI, Azure DevOps, and Bitbucket.
@@ -420,7 +442,20 @@ Answer **yes** and it runs the full refactor pipeline (write tests → refactor 
 
 The prompt only appears in an interactive terminal, so CI runs are never blocked.
 
-**In the web dashboard**, a completed analyze run shows a **🔧 Fix these issues** button that launches the same safe refactor over the analyzed scope.
+**In the web dashboard**, a completed analyze run shows a **🔧 Fix these issues** panel. It lists every file that has findings (most issues first) with checkboxes, so you can:
+
+- **Select specific files** to refactor only those (great for large reports), or
+- **Leave everything unchecked** to fix the whole analyzed scope.
+
+Either way it launches the same safe, test-verified refactor (auto-rollback on regression).
+
+From the CLI you can target multiple files directly:
+
+```bash
+php artisan codeguardian:refactor --files="app/Services/AuthService.php,app/Http/Controllers/Auth/LoginController.php" --safe
+```
+
+`--files=` traces each file's dependency chain (via Reflection) and refactors them together, just like `--file=` does for a single file.
 
 ---
 
@@ -526,7 +561,9 @@ Reports are saved to `storage/codeguardian/reports/`.
 php artisan codeguardian:doctor          # health check with fix suggestions
 php artisan codeguardian:doctor --json   # machine-readable
 php artisan codeguardian:rules           # list every detection rule + its state
+php artisan codeguardian:rules sql_injection  # full docs for one rule (why + fix + refs)
 php artisan codeguardian:trend           # code-health trend across past runs
+php artisan codeguardian:comment --dry-run    # preview the PR/MR summary comment
 ```
 
 See [Continuous Integration](#continuous-integration) for SARIF, baseline/diff, and CI wiring.
@@ -665,6 +702,17 @@ php artisan codeguardian:rules --enabled-only --json # machine-readable
 ```
 
 Severity overrides apply *before* scoring, filters, and CI gates, so `--min-severity` / `--fail-on` see the effective severities.
+
+#### Per-rule documentation
+
+Every rule ships with a short, opinionated explainer — what it means, **why it matters**, **how to fix it**, and authoritative references (OWASP / CWE / Laravel docs). Look one up from the CLI:
+
+```bash
+php artisan codeguardian:rules sql_injection         # full docs for a single rule
+php artisan codeguardian:rules n_plus_one --json     # machine-readable detail
+```
+
+HTML reports link each finding to its rule docs via a **📚 Learn more** link, so reviewers can self-serve the reasoning without leaving the report.
 
 ### Failing CI on a threshold
 

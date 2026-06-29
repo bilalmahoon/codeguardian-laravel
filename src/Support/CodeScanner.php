@@ -353,6 +353,53 @@ class CodeScanner
     }
 
     /**
+     * Build a context for several explicit files (each with its traced
+     * dependency chain), merged into a single context. Used for selective
+     * refactoring (--files=, dashboard "fix selected").
+     *
+     * @param array<int,string> $relPaths
+     * @return array<string,mixed>
+     */
+    public function buildContextForFiles(string $projectRoot, array $relPaths): array
+    {
+        $relPaths = array_values(array_unique(array_filter(array_map(
+            fn($p) => ltrim(trim((string) $p), '/'),
+            $relPaths
+        ), fn($p) => $p !== '')));
+
+        if ($relPaths === []) {
+            throw new \InvalidArgumentException('No files provided to analyze.');
+        }
+
+        $files       = [];
+        $fileReasons = [];
+
+        foreach ($relPaths as $rel) {
+            $ctx = $this->buildContextForFile($projectRoot, $rel);
+            foreach ($ctx['files'] as $path => $content) {
+                $files[$path] = $content;
+            }
+            foreach (($ctx['file_reasons'] ?? []) as $path => $reason) {
+                $fileReasons[$path] ??= $reason;
+            }
+        }
+
+        $summary = $this->buildSummary($files, 'laravel');
+
+        return [
+            'project_type'      => 'laravel',
+            'project_name'      => basename($projectRoot) . ' [' . count($relPaths) . ' files]',
+            'scan_path'         => $projectRoot,
+            'files'             => $files,
+            'summary'           => $summary,
+            'scope'             => 'files',
+            'resolution_method' => 'files+reflection',
+            'module_root'       => null,
+            'file_reasons'      => $fileReasons,
+        ];
+    }
+
+    /**
      * Extract the fully-qualified class name declared in a PHP source string.
      * Returns null if no namespaced class/interface/trait/enum is found.
      */
