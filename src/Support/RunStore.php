@@ -100,12 +100,20 @@ class RunStore
             $artisan . ($argString !== '' ? ' ' . $argString : '')
         );
 
-        // { run ; echo sentinel:$? ; } >> log 2>&1 &   — fully detached via nohup.
-        $shell = sprintf(
-            'nohup sh -c %s >> %s 2>&1 &',
-            escapeshellarg(sprintf('{ %s ; echo "%s$?" ; }', $base, self::SENTINEL)),
+        // Redirect the INNER command's output (incl. the completion sentinel) to
+        // the log file from inside `sh -c`. nohup's own stdout/stderr then go to
+        // /dev/null, so its harmless startup notice — "nohup: can't detach from
+        // console: Inappropriate ioctl for device" — never lands in the run log.
+        // (Putting `2>&1` on the nohup line itself routes that notice INTO the
+        // log; redirecting inside sh -c is what avoids it.)
+        $inner = sprintf(
+            '{ %s ; echo "%s$?" ; } >> %s 2>&1',
+            $base,
+            self::SENTINEL,
             escapeshellarg($log)
         );
+
+        $shell = sprintf('nohup sh -c %s >/dev/null 2>&1 &', escapeshellarg($inner));
 
         // proc_open detaches cleanly; we immediately close the handles so the
         // child outlives the web request.

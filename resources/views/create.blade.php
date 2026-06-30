@@ -33,7 +33,13 @@
             </div>
             <div class="field" id="target-value-wrap">
                 <label class="lbl" for="target_value">Choose / search</label>
-                <input type="text" name="target_value" id="target_value" list="" autocomplete="off" placeholder="">
+                <div class="cg-combo">
+                    <input type="text" name="target_value" id="target_value" autocomplete="off"
+                           role="combobox" aria-autocomplete="list" aria-expanded="false"
+                           aria-controls="target_panel" placeholder="">
+                    <span class="clear" id="target_clear" title="Clear" aria-label="Clear">&times;</span>
+                    <div class="cg-panel" id="target_panel" role="listbox"></div>
+                </div>
                 <div class="hint" id="target-hint"></div>
             </div>
         </div>
@@ -153,25 +159,148 @@
             const wrap = document.getElementById('target-value-wrap');
             const hint = document.getElementById('target-hint');
 
+            cgCombo.close();
             if (meta.none) {
                 wrap.style.display = 'none';
                 input.value = '';
                 hint.textContent = '';
+                cgCombo.setList(null);
+                cgCombo.refreshClear();
                 return;
             }
             wrap.style.display = '';
             input.placeholder = meta.ph || '';
-            if (meta.list && document.getElementById(meta.list)) {
-                input.setAttribute('list', meta.list);
+            if (meta.list && CG_OPTION_SETS[meta.list]) {
+                cgCombo.setList(meta.list);
                 const n = CG_COUNTS[type];
                 hint.textContent = (n === 0)
                     ? 'None found in this project — you can still type a value.'
-                    : 'Type to filter the list, or paste a value.';
+                    : 'Click to open, type to filter, ↑/↓ to navigate, Enter to pick. Drag the bottom edge to resize.';
             } else {
-                input.removeAttribute('list');
+                cgCombo.setList(null);
                 hint.textContent = meta.free ? 'Type a path relative to the project root.' : '';
             }
+            cgCombo.refreshClear();
         }
+
+        // Build option sets from the (invisible) native datalists so the server
+        // stays the single source of truth for routes/modules/commands.
+        const CG_OPTION_SETS = {};
+        ['dl-module', 'dl-api', 'dl-web', 'dl-command'].forEach(function (id) {
+            const dl = document.getElementById(id);
+            CG_OPTION_SETS[id] = dl ? Array.prototype.map.call(dl.querySelectorAll('option'), function (o) {
+                return { value: o.value, meta: (o.textContent || '').trim() };
+            }) : [];
+        });
+
+        /* ───────── Custom searchable combobox (scrollable + resizable) ───────── */
+        const cgCombo = (function () {
+            const input = document.getElementById('target_value');
+            const panel = document.getElementById('target_panel');
+            const clear = document.getElementById('target_clear');
+            const sets = CG_OPTION_SETS;
+
+            let listId = null, filtered = [], active = -1;
+            const RENDER_CAP = 300;
+
+            function esc(s) {
+                return String(s).replace(/[&<>"]/g, function (c) {
+                    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+                });
+            }
+            // Split "GET|POST /uri — action" so the methods render as a badge.
+            function methodBadge(metaText) {
+                const m = metaText.match(/^([A-Z|,]+)\s+(.*)$/);
+                if (!m) return { badge: '', rest: metaText };
+                return { badge: '<span class="cg-method">' + esc(m[1]) + '</span>', rest: m[2] };
+            }
+
+            function render() {
+                if (!listId) return;
+                const q = input.value.toLowerCase().trim();
+                const all = sets[listId] || [];
+                filtered = all.filter(function (o) {
+                    return q === '' ||
+                        o.value.toLowerCase().indexOf(q) !== -1 ||
+                        o.meta.toLowerCase().indexOf(q) !== -1;
+                });
+                const shown = filtered.slice(0, RENDER_CAP);
+                let html = '<div class="cg-count">' + filtered.length + ' match' + (filtered.length === 1 ? '' : 'es') + '</div>';
+                if (shown.length === 0) {
+                    html += '<div class="cg-empty">No matches — you can still type a custom value.</div>';
+                } else {
+                    html += shown.map(function (o, i) {
+                        let metaHtml = '';
+                        if (o.meta && o.meta !== o.value) {
+                            const mb = methodBadge(o.meta);
+                            metaHtml = '<div class="meta">' + mb.badge + esc(mb.rest) + '</div>';
+                        }
+                        return '<div class="cg-opt" data-i="' + i + '"><div class="v">' + esc(o.value) + '</div>' + metaHtml + '</div>';
+                    }).join('');
+                    if (filtered.length > RENDER_CAP) {
+                        html += '<div class="cg-empty">+' + (filtered.length - RENDER_CAP) + ' more — keep typing to narrow</div>';
+                    }
+                }
+                panel.innerHTML = html;
+                active = -1;
+            }
+
+            function open() {
+                if (!listId) return;
+                render();
+                panel.classList.add('open');
+                input.setAttribute('aria-expanded', 'true');
+            }
+            function close() {
+                panel.classList.remove('open');
+                input.setAttribute('aria-expanded', 'false');
+                active = -1;
+            }
+            function opts() { return panel.querySelectorAll('.cg-opt'); }
+            function highlight(i) {
+                const els = opts();
+                if (!els.length) return;
+                active = (i + els.length) % els.length;
+                els.forEach(function (el, idx) { el.classList.toggle('active', idx === active); });
+                els[active].scrollIntoView({ block: 'nearest' });
+            }
+            function choose(i) {
+                if (i < 0 || i >= filtered.length) return;
+                input.value = filtered[i].value;
+                refreshClear();
+                close();
+                input.focus();
+            }
+            function refreshClear() {
+                clear.style.display = input.value !== '' ? 'block' : 'none';
+            }
+
+            input.addEventListener('focus', open);
+            input.addEventListener('click', open);
+            input.addEventListener('input', function () { refreshClear(); open(); });
+            input.addEventListener('keydown', function (e) {
+                if (!panel.classList.contains('open') && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { open(); return; }
+                if (e.key === 'ArrowDown') { e.preventDefault(); highlight(active + 1); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); highlight(active - 1); }
+                else if (e.key === 'Enter') { if (active >= 0) { e.preventDefault(); choose(active); } }
+                else if (e.key === 'Escape') { close(); }
+            });
+            // mousedown (not click) so selection wins the race against input blur.
+            panel.addEventListener('mousedown', function (e) {
+                const opt = e.target.closest('.cg-opt');
+                if (opt) { e.preventDefault(); choose(parseInt(opt.getAttribute('data-i'), 10)); }
+            });
+            clear.addEventListener('click', function () { input.value = ''; refreshClear(); open(); input.focus(); });
+            document.addEventListener('click', function (e) {
+                if (!e.target.closest('.cg-combo')) close();
+            });
+
+            return {
+                setList: function (id) { listId = id; },
+                close: close,
+                refreshClear: refreshClear,
+            };
+        })();
 
         cgSyncOperation();
     </script>

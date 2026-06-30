@@ -95,6 +95,28 @@
         .finding .loc { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 4px; }
         .finding .desc { font-size: 13px; color: var(--muted); margin-top: 8px; }
         .qbar { display: grid; grid-template-columns: 140px 1fr 60px; gap: 12px; align-items: center; padding: 6px 0; font-size: 13px; }
+        /* Searchable combobox (custom, scrollable + resizable dropdown) */
+        .cg-combo { position: relative; }
+        .cg-combo .clear { position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+            cursor: pointer; color: var(--muted); font-size: 16px; line-height: 1; padding: 2px 4px; display: none; }
+        .cg-combo .clear:hover { color: var(--text); }
+        .cg-panel { position: absolute; left: 0; right: 0; top: calc(100% + 5px); z-index: 60;
+            background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+            max-height: 300px; min-height: 44px; overflow-y: auto; resize: vertical;
+            box-shadow: 0 14px 36px #000a; display: none; }
+        .cg-panel.open { display: block; }
+        .cg-panel::-webkit-scrollbar { width: 10px; }
+        .cg-panel::-webkit-scrollbar-thumb { background: #ffffff22; border-radius: 8px; }
+        .cg-opt { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--border); }
+        .cg-opt:last-child { border-bottom: none; }
+        .cg-opt.active, .cg-opt:hover { background: #5b8cff1f; }
+        .cg-opt .v { font-weight: 600; font-size: 13px; color: var(--text); word-break: break-all; }
+        .cg-opt .meta { color: var(--muted); font-size: 11.5px; margin-top: 2px; font-family: var(--mono); word-break: break-all; }
+        .cg-opt .cg-method { display: inline-block; font-family: var(--mono); font-size: 10px; font-weight: 700;
+            padding: 1px 6px; border-radius: 4px; margin-right: 6px; background: #1f6feb22; color: #6ea8ff; vertical-align: middle; }
+        .cg-empty { padding: 12px; color: var(--muted); font-size: 12.5px; text-align: center; }
+        .cg-count { position: sticky; top: 0; background: var(--panel); color: var(--muted);
+            font-size: 11px; padding: 6px 12px; border-bottom: 1px solid var(--border); }
     </style>
 </head>
 <body>

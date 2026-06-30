@@ -1,0 +1,1076 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CodeGuardian AI for Laravel — Complete Documentation</title>
+<style>
+    :root {
+        --ink: #1a202c; --muted: #5b6675; --faint: #8a93a6;
+        --accent: #2b59ff; --accent-2: #6b3df5;
+        --line: #e2e6ee; --bg-soft: #f6f8fc; --bg-code: #0f1525; --code-ink: #d7e0f5;
+        --green: #1c8a4a; --red: #c92a2a; --amber: #b7791f; --blue: #2256c7;
+        --mono: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+        --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body {
+        font-family: var(--sans); color: var(--ink); margin: 0;
+        font-size: 11pt; line-height: 1.55;
+    }
+    .page { padding: 0 18mm; }
+
+    /* ---------- Cover ---------- */
+    .cover {
+        height: 100vh; display: flex; flex-direction: column; justify-content: center;
+        padding: 0 22mm; color: #fff; position: relative; overflow: hidden;
+        background: linear-gradient(135deg, #0b1437 0%, #1a2a6b 45%, #3b1d6e 100%);
+    }
+    .cover::after {
+        content: ""; position: absolute; right: -120px; top: -120px; width: 520px; height: 520px;
+        background: radial-gradient(circle, rgba(107,61,245,.55), transparent 62%);
+    }
+    .cover .diamond { font-size: 46px; letter-spacing: 1px; }
+    .cover h1 { font-size: 40pt; line-height: 1.05; margin: 8px 0 6px; font-weight: 800; }
+    .cover .accent { color: #93a8ff; }
+    .cover .sub { font-size: 15pt; color: #c4ccea; font-weight: 500; margin-bottom: 28px; }
+    .cover .tagline { font-size: 12pt; color: #aab4dd; max-width: 520px; }
+    .cover .meta { position: absolute; bottom: 24mm; left: 22mm; right: 22mm; display: flex; gap: 30px; font-size: 10pt; color: #c4ccea; border-top: 1px solid rgba(255,255,255,.18); padding-top: 14px; }
+    .cover .meta b { color: #fff; font-weight: 600; display: block; }
+    .cover .pills { margin-top: 26px; }
+    .cover .pill { display: inline-block; border: 1px solid rgba(255,255,255,.35); border-radius: 999px; padding: 5px 13px; margin: 0 7px 8px 0; font-size: 9.5pt; color: #e7ebff; }
+
+    /* ---------- Typography ---------- */
+    h1.section {
+        font-size: 22pt; margin: 0 0 4px; padding-bottom: 8px; border-bottom: 3px solid var(--accent);
+        color: var(--ink); font-weight: 800;
+    }
+    .kicker { color: var(--accent); font-weight: 700; font-size: 9.5pt; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 6px; }
+    h2 { font-size: 14.5pt; margin: 26px 0 8px; color: var(--ink); font-weight: 700; }
+    h3 { font-size: 12pt; margin: 18px 0 6px; color: #2a3242; font-weight: 700; }
+    p { margin: 8px 0; }
+    ul, ol { margin: 8px 0 8px 0; padding-left: 22px; }
+    li { margin: 4px 0; }
+    a { color: var(--accent); text-decoration: none; }
+    code { font-family: var(--mono); font-size: 9.5pt; background: var(--bg-soft); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; color: #2a3550; }
+    strong { font-weight: 700; }
+    .lead { font-size: 12pt; color: var(--muted); }
+    .muted { color: var(--muted); }
+
+    pre {
+        background: var(--bg-code); color: var(--code-ink); border-radius: 8px; padding: 13px 15px;
+        font-family: var(--mono); font-size: 8.8pt; line-height: 1.5; overflow: hidden; white-space: pre-wrap;
+        word-break: break-word; margin: 10px 0; border: 1px solid #1b243d;
+    }
+    pre .c { color: #7e89a6; } /* comment */
+    pre .k { color: #ff9a76; } /* keyword/cmd */
+    pre .s { color: #8fe388; } /* string/ok */
+    pre .t { color: #ffd479; } /* title */
+
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 9.8pt; }
+    th, td { text-align: left; padding: 7px 10px; border: 1px solid var(--line); vertical-align: top; }
+    th { background: var(--bg-soft); font-weight: 700; color: #2a3242; }
+    tr:nth-child(even) td { background: #fafbfe; }
+    td code { font-size: 9pt; }
+
+    .callout { border-left: 4px solid var(--accent); background: var(--bg-soft); padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 12px 0; font-size: 10pt; }
+    .callout.warn { border-color: var(--amber); background: #fdf6e9; }
+    .callout.ok { border-color: var(--green); background: #eefaf1; }
+    .callout.tip { border-color: var(--accent-2); background: #f4f0ff; }
+
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+    .card h4 { margin: 0 0 4px; font-size: 11pt; }
+    .card .num { font-size: 20pt; font-weight: 800; color: var(--accent); }
+
+    .badge { display: inline-block; border-radius: 5px; padding: 1px 7px; font-size: 8.5pt; font-weight: 700; }
+    .b-crit { background: #fdeaea; color: var(--red); } .b-high { background: #fff0e6; color: #d9480f; }
+    .b-med { background: #fdf6e3; color: var(--amber); } .b-low { background: #eafaef; color: var(--green); }
+
+    /* ---------- TOC ---------- */
+    .toc { columns: 2; column-gap: 36px; font-size: 10pt; }
+    .toc .row { break-inside: avoid; display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px dotted var(--line); }
+    .toc .row b { color: var(--accent); margin-right: 8px; }
+    .toc a { color: var(--ink); }
+
+    /* ---------- Print ---------- */
+    @page { size: A4; margin: 16mm 0 16mm 0; }
+    section.sec { page-break-before: always; padding: 0 18mm; }
+    .cover { page-break-after: always; }
+    .avoid { break-inside: avoid; page-break-inside: avoid; }
+    h1.section, h2, h3 { break-after: avoid; }
+    table, pre, .callout, .card { break-inside: avoid; }
+</style>
+</head>
+<body>
+
+<!-- ============================ COVER ============================ -->
+<div class="cover">
+    <div class="diamond">◆</div>
+    <h1>CodeGuardian&nbsp;AI<br><span class="accent">for Laravel</span></h1>
+    <div class="sub">Analyze · Improve · Validate · Report</div>
+    <div class="tagline">
+        A production-grade, embedded static-analysis, security-audit, automated-refactoring
+        and reporting platform that installs into any Laravel project as a Composer package —
+        with an optional AI engine and a full web dashboard.
+    </div>
+    <div class="pills">
+        <span class="pill">PHP ^8.1</span>
+        <span class="pill">Laravel 9 / 10 / 11</span>
+        <span class="pill">Flutter / Dart</span>
+        <span class="pill">20 Artisan Commands</span>
+        <span class="pill">Zero-cost Static Engine</span>
+        <span class="pill">OpenAI · Claude · Gemini</span>
+        <span class="pill">CI / SARIF / JUnit</span>
+        <span class="pill">Web Dashboard</span>
+    </div>
+    <div class="meta">
+        <div><b>Package</b> codeguardian/laravel</div>
+        <div><b>Document</b> Complete Reference &amp; User Guide</div>
+        <div><b>License</b> MIT</div>
+        <div><b>Version</b> dev-main</div>
+    </div>
+</div>
+
+<!-- ============================ TOC ============================ -->
+<section class="sec">
+    <div class="kicker">Reference Guide</div>
+    <h1 class="section">Table of Contents</h1>
+    <div class="toc">
+        <div class="row"><a href="#intro"><b>1</b> Introduction &amp; Overview</a></div>
+        <div class="row"><a href="#features"><b>2</b> Feature Summary</a></div>
+        <div class="row"><a href="#requirements"><b>3</b> Requirements</a></div>
+        <div class="row"><a href="#install"><b>4</b> Installation</a></div>
+        <div class="row"><a href="#quickstart"><b>5</b> Quick Start</a></div>
+        <div class="row"><a href="#config"><b>6</b> Configuration Reference</a></div>
+        <div class="row"><a href="#commands"><b>7</b> Command Reference (all 20)</a></div>
+        <div class="row"><a href="#detect"><b>8</b> What It Detects</a></div>
+        <div class="row"><a href="#results"><b>9</b> Understanding the Results</a></div>
+        <div class="row"><a href="#cli"><b>10</b> Premium CLI Experience</a></div>
+        <div class="row"><a href="#reporting"><b>11</b> Enterprise Reporting</a></div>
+        <div class="row"><a href="#dashboard"><b>12</b> Web Dashboard</a></div>
+        <div class="row"><a href="#refactor"><b>13</b> Foolproof Refactoring</a></div>
+        <div class="row"><a href="#filter"><b>14</b> Filtering &amp; Suppression</a></div>
+        <div class="row"><a href="#rules"><b>15</b> Rule Configuration</a></div>
+        <div class="row"><a href="#ci"><b>16</b> Continuous Integration</a></div>
+        <div class="row"><a href="#ai"><b>17</b> AI Mode</a></div>
+        <div class="row"><a href="#arch"><b>18</b> Architecture &amp; How It Works</a></div>
+        <div class="row"><a href="#extend"><b>19</b> Extending the Engine</a></div>
+        <div class="row"><a href="#trouble"><b>20</b> Troubleshooting</a></div>
+        <div class="row"><a href="#faq"><b>21</b> FAQ</a></div>
+        <div class="row"><a href="#appendix"><b>22</b> Appendix: Env, Exit Codes, Glossary</a></div>
+    </div>
+
+    <h2>About this document</h2>
+    <p class="muted">This is the complete, self-contained reference for CodeGuardian AI for Laravel.
+    It covers installation, every configuration key, all 20 artisan commands with their options and
+    examples, the detection catalogue, reporting formats, the web dashboard, the safe refactoring
+    pipeline, CI/CD integration, the AI engine, internal architecture, and troubleshooting.
+    It is intended both as an onboarding guide for new users and as a submission-ready specification.</p>
+</section>
+
+<!-- ============================ 1. INTRO ============================ -->
+<section class="sec" id="intro">
+    <div class="kicker">Section 1</div>
+    <h1 class="section">Introduction &amp; Overview</h1>
+    <p class="lead">CodeGuardian AI is a static code analysis, security auditing, automated refactoring,
+    and reporting platform for Laravel (PHP) and Flutter (Dart) projects. It installs as a Composer
+    package and runs entirely through artisan commands or a built-in web dashboard.</p>
+
+    <div class="callout ok"><strong>No API key needed. No internet required. No cost. 100% embedded.</strong>
+    The default <code>static</code> engine performs all core analysis offline and free. AI mode is
+    an optional upgrade for richer, intent-aware explanations.</div>
+
+    <h2>What problem does it solve?</h2>
+    <p>Most teams discover architectural debt, security holes, and performance traps too late — in
+    production, in incidents, or in painful code reviews. CodeGuardian shifts that discovery left:
+    it scans the codebase deterministically, scores its health across six dimensions, explains every
+    finding with a concrete fix, and can <em>safely</em> apply many fixes automatically behind a
+    test-verified safety net.</p>
+
+    <h2>The core workflow</h2>
+    <ol>
+        <li><strong>Analyze</strong> — scan code and produce findings, scores, and a risk rating.</li>
+        <li><strong>Generate tests</strong> — write PHPUnit stubs <em>before</em> any code changes.</li>
+        <li><strong>Refactor</strong> — apply deterministic + AI-driven improvements, one file at a time.</li>
+        <li><strong>Validate</strong> — re-run tests; auto-rollback any change that introduces a regression.</li>
+        <li><strong>Report</strong> — emit enterprise-grade reports (console, HTML, JSON, Markdown, SARIF, JUnit).</li>
+    </ol>
+
+    <h2>Who is it for?</h2>
+    <div class="grid2">
+        <div class="card avoid"><h4>Engineering teams</h4><p class="muted">Continuous code-health gating in CI, PR review automation, and onboarding-quality reports.</p></div>
+        <div class="card avoid"><h4>Tech leads &amp; architects</h4><p class="muted">Six-dimension scorecards, module dependency graphs, and trend tracking over time.</p></div>
+        <div class="card avoid"><h4>Security engineers</h4><p class="muted">OWASP/CWE-mapped findings, dependency CVE audits, and SARIF for code-scanning platforms.</p></div>
+        <div class="card avoid"><h4>Individual developers</h4><p class="muted">A fast inner-loop watcher, deterministic auto-fixes, and a friendly local dashboard.</p></div>
+    </div>
+</section>
+
+<!-- ============================ 2. FEATURES ============================ -->
+<section class="sec" id="features">
+    <div class="kicker">Section 2</div>
+    <h1 class="section">Feature Summary</h1>
+    <table>
+        <thead><tr><th style="width:30%">Capability</th><th>Description</th></tr></thead>
+        <tbody>
+            <tr><td><strong>Static analysis engine</strong></td><td>Rule-based architecture, security, performance, tech-debt and database analyzers — offline, free, deterministic.</td></tr>
+            <tr><td><strong>Security taxonomy</strong></td><td>Every security finding mapped to OWASP Top 10 (2021), a CWE id, an indicative CVSS band, confidence, impact, effort, and breaking-change risk.</td></tr>
+            <tr><td><strong>Six-dimension scorecard</strong></td><td>Architecture, Security, Performance, Maintainability, Testability, Reliability — each 0–100 with a grade and reasoning.</td></tr>
+            <tr><td><strong>Explainable risk score</strong></td><td>0–100 urgency rating weighted by severity × confidence, with plain-English justification.</td></tr>
+            <tr><td><strong>Foolproof refactoring</strong></td><td>Test → refactor → verify loop with automatic rollback on regression; syntax-validated writes.</td></tr>
+            <tr><td><strong>Deterministic auto-fixes</strong></td><td>No-AI mechanical fixes (remove <code>dd()</code>, <code>$request->all()</code> → <code>validated()</code>, add return types, …).</td></tr>
+            <tr><td><strong>AI engine (optional)</strong></td><td>OpenAI / Claude / Gemini for natural-language, intent-aware review and deep refactors. Diff-only review mode for cheap PR review.</td></tr>
+            <tr><td><strong>Premium CLI</strong></td><td>Live multi-stage pipeline with spinners, ETA, per-file ticks, and an execution-stats card; TTY-aware plain mode for CI.</td></tr>
+            <tr><td><strong>Reporting formats</strong></td><td>Console, HTML (interactive), JSON, Markdown, SARIF 2.1.0, JUnit XML.</td></tr>
+            <tr><td><strong>Web dashboard</strong></td><td>Run everything from the browser, watch live progress, browse history, an Insights trends page, and an interactive findings explorer.</td></tr>
+            <tr><td><strong>CI/CD native</strong></td><td>SARIF upload, baseline/diff (fail only on new findings), JUnit panels, inline PR annotations, PR/MR comments, quality gates, and a doctor preflight.</td></tr>
+            <tr><td><strong>Performance &amp; caching</strong></td><td>Parallel analyzers (pcntl), incremental git-scoped scans, AI response cache, and content-addressed static result cache.</td></tr>
+            <tr><td><strong>Extensibility</strong></td><td>Config-driven rule enable/disable/severity, tuning presets, custom regex rules, and external tool ingestion (PHPStan/Psalm/Clover).</td></tr>
+            <tr><td><strong>Flutter / Dart</strong></td><td>Dedicated Dart analyzer auto-enables when <code>*.dart</code> files are present.</td></tr>
+        </tbody>
+    </table>
+</section>
+
+<!-- ============================ 3. REQUIREMENTS ============================ -->
+<section class="sec" id="requirements">
+    <div class="kicker">Section 3</div>
+    <h1 class="section">Requirements</h1>
+    <table>
+        <thead><tr><th>Requirement</th><th>Version / Notes</th></tr></thead>
+        <tbody>
+            <tr><td>PHP</td><td><code>^8.1</code></td></tr>
+            <tr><td>Laravel</td><td><code>^9.0</code> / <code>^10.0</code> / <code>^11.0</code></td></tr>
+            <tr><td>API key</td><td><strong>Not required</strong> for static mode (default). Only needed for AI / hybrid mode.</td></tr>
+            <tr><td>PHP extensions</td><td><code>tokenizer</code> (required); <code>pcntl</code> (optional, for parallel analysis)</td></tr>
+            <tr><td>Composer dependencies</td><td><code>illuminate/console</code>, <code>illuminate/support</code>, <code>illuminate/filesystem</code>, <code>guzzlehttp/guzzle ^7.2</code>, <code>nikic/php-parser ^4.18|^5.0</code></td></tr>
+            <tr><td>Dev dependencies</td><td><code>orchestra/testbench</code>, <code>phpunit/phpunit</code></td></tr>
+        </tbody>
+    </table>
+    <div class="callout tip">The package auto-registers via Laravel package discovery
+    (<code>CodeGuardian\Laravel\CodeGuardianServiceProvider</code>) and ships a
+    <code>CodeGuardian</code> facade alias.</div>
+</section>
+
+<!-- ============================ 4. INSTALL ============================ -->
+<section class="sec" id="install">
+    <div class="kicker">Section 4</div>
+    <h1 class="section">Installation</h1>
+
+    <h2>Option A — Install from GitHub (any machine)</h2>
+    <p><strong>Step 1.</strong> Add the repository to your project's <code>composer.json</code>:</p>
+    <pre>{
+    <span class="t">"repositories"</span>: [
+        {
+            <span class="t">"type"</span>: <span class="s">"vcs"</span>,
+            <span class="t">"url"</span>: <span class="s">"https://github.com/bilalmahoon/codeguardian-laravel"</span>
+        }
+    ]
+}</pre>
+    <p><strong>Step 2.</strong> Require the package:</p>
+    <pre><span class="k">composer</span> require codeguardian/laravel:dev-main</pre>
+    <p><strong>Step 3.</strong> (Optional) Publish the config:</p>
+    <pre><span class="k">php</span> artisan vendor:publish --tag=codeguardian-config</pre>
+    <p>This creates <code>config/codeguardian.php</code> where you can customise skip directories, output paths, rules, gates, and more.</p>
+
+    <h2>Option B — Local development (path repository)</h2>
+    <p>If you have the package source on disk:</p>
+    <pre>{
+    <span class="t">"repositories"</span>: [
+        {
+            <span class="t">"type"</span>: <span class="s">"path"</span>,
+            <span class="t">"url"</span>: <span class="s">"/absolute/path/to/packages/codeguardian-laravel"</span>,
+            <span class="t">"options"</span>: { <span class="t">"symlink"</span>: true }
+        }
+    ]
+}</pre>
+    <pre><span class="k">composer</span> require codeguardian/laravel:@dev</pre>
+
+    <h2>One-command setup</h2>
+    <pre><span class="k">php</span> artisan codeguardian:init                 <span class="c"># publish config + scaffold CI + (optional) git hook</span>
+<span class="k">php</span> artisan codeguardian:init --ci=gitlab --hook</pre>
+    <p><code>codeguardian:init</code> publishes the config, writes a ready-to-use CI workflow
+    (GitHub Actions or GitLab CI, auto-detected), and can install a pre-commit hook that runs a
+    fast incremental scan. Nothing is overwritten without <code>--force</code>.</p>
+
+    <h2>Verify the setup</h2>
+    <pre><span class="k">php</span> artisan codeguardian:doctor          <span class="c"># health check with fix suggestions</span></pre>
+</section>
+
+<!-- ============================ 5. QUICK START ============================ -->
+<section class="sec" id="quickstart">
+    <div class="kicker">Section 5</div>
+    <h1 class="section">Quick Start</h1>
+    <p>The only required <code>.env</code> setting is — nothing. By default the tool runs in
+    <strong>static mode</strong>, fully offline, with no API key.</p>
+
+    <pre><span class="c"># 1. Analyze the entire project</span>
+<span class="k">php</span> artisan codeguardian:analyze
+
+<span class="c"># 2. Analyze a specific area</span>
+<span class="k">php</span> artisan codeguardian:analyze --path=app/Http/Controllers
+<span class="k">php</span> artisan codeguardian:analyze --module=User
+<span class="k">php</span> artisan codeguardian:analyze --api=orders
+
+<span class="c"># 3. Analyze, then automatically FIX issues (safe, test-verified, auto-rollback)</span>
+<span class="k">php</span> artisan codeguardian:analyze --fix
+
+<span class="c"># 4. Security or performance only</span>
+<span class="k">php</span> artisan codeguardian:security --fail-on=high
+<span class="k">php</span> artisan codeguardian:performance
+
+<span class="c"># 5. Full interactive refactoring workflow</span>
+<span class="k">php</span> artisan codeguardian:refactor
+
+<span class="c"># 6. Open the dashboard</span>
+<span class="c"># https://your-app.test/codeguardian</span></pre>
+
+    <div class="callout">When <code>analyze</code> finds issues in an interactive terminal, it offers to
+    fix them right there (skipped automatically in CI / <code>--no-interaction</code>).</div>
+</section>
+
+<!-- ============================ 6. CONFIG ============================ -->
+<section class="sec" id="config">
+    <div class="kicker">Section 6</div>
+    <h1 class="section">Configuration Reference</h1>
+    <p>All settings live in <code>config/codeguardian.php</code>. Every key below maps to an environment
+    variable where shown, so you can configure per-environment without editing the file.</p>
+
+    <h2>Engine &amp; provider</h2>
+    <table>
+        <thead><tr><th>Key</th><th>Env</th><th>Default</th><th>Purpose</th></tr></thead>
+        <tbody>
+            <tr><td><code>mode</code></td><td><code>CODEGUARDIAN_MODE</code></td><td><code>static</code></td><td>Engine: <code>static</code> (offline rules), <code>ai</code> (provider), or <code>hybrid</code> (static + AI enrichment).</td></tr>
+            <tr><td><code>provider</code></td><td><code>CODEGUARDIAN_PROVIDER</code></td><td><code>openai</code></td><td>AI provider when mode is ai/hybrid: <code>openai</code>, <code>claude</code>, <code>gemini</code>.</td></tr>
+        </tbody>
+    </table>
+
+    <h2>AI provider blocks (<code>openai</code> / <code>claude</code> / <code>gemini</code>)</h2>
+    <table>
+        <thead><tr><th>Key</th><th>Env</th><th>Default</th></tr></thead>
+        <tbody>
+            <tr><td><code>key</code></td><td><code>CODEGUARDIAN_OPENAI_KEY</code> / <code>CODEGUARDIAN_CLAUDE_KEY</code> / <code>CODEGUARDIAN_GEMINI_KEY</code></td><td>(falls back to <code>OPENAI_API_KEY</code> / <code>ANTHROPIC_API_KEY</code> / <code>GEMINI_API_KEY</code>)</td></tr>
+            <tr><td><code>model</code></td><td><code>CODEGUARDIAN_OPENAI_MODEL</code> / <code>..._CLAUDE_MODEL</code> / <code>..._GEMINI_MODEL</code></td><td><code>gpt-4o</code> / <code>claude-opus-4-5</code> / <code>gemini-1.5-flash</code></td></tr>
+            <tr><td><code>max_tokens</code></td><td><code>CODEGUARDIAN_MAX_TOKENS</code></td><td><code>8192</code></td></tr>
+            <tr><td><code>refactor_max_tokens</code></td><td><code>CODEGUARDIAN_REFACTOR_MAX_TOKENS</code></td><td><code>16000</code></td></tr>
+            <tr><td><code>temperature</code></td><td>—</td><td><code>0.1</code></td></tr>
+        </tbody>
+    </table>
+
+    <h2>Analysis</h2>
+    <table>
+        <thead><tr><th>Key</th><th>Default</th><th>Purpose</th></tr></thead>
+        <tbody>
+            <tr><td><code>analysis.max_file_size</code></td><td><code>100000</code></td><td>Max file size (bytes) included in AI context.</td></tr>
+            <tr><td><code>analysis.parallel</code></td><td><code>false</code> (<code>CODEGUARDIAN_PARALLEL</code>)</td><td>Run analyzers in parallel OS processes (needs <code>pcntl</code>).</td></tr>
+            <tr><td><code>analysis.max_files_per_scan</code></td><td><code>2000</code></td><td>Warn/confirm above this file count (0 disables).</td></tr>
+            <tr><td><code>analysis.skip_dirs</code></td><td><code>vendor, node_modules, .git, storage, bootstrap/cache, .dart_tool, build, .pub-cache</code></td><td>Directories excluded from scanning.</td></tr>
+            <tr><td><code>analysis.auto_validate_tests</code></td><td><code>false</code></td><td>Run tests immediately after generation.</td></tr>
+            <tr><td><code>analysis.max_context_tokens</code></td><td><code>60000</code></td><td>Token budget per AI request.</td></tr>
+            <tr><td><code>analysis.test_timeout</code></td><td><code>120</code></td><td>Seconds before a test run times out.</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Rules, presets, custom rules &amp; suppression</h2>
+    <table>
+        <thead><tr><th>Key</th><th>Purpose</th></tr></thead>
+        <tbody>
+            <tr><td><code>modules.paths</code></td><td>Extra module root directories if not auto-detected (<code>Modules/</code>, <code>app/Modules/</code>, <code>app/Domain/</code>).</td></tr>
+            <tr><td><code>rules</code></td><td>Per-rule control keyed by category: <code>false</code> (disable), a severity string (override), or <code>['enabled'=&gt;bool,'severity'=&gt;'..']</code>.</td></tr>
+            <tr><td><code>preset</code> (<code>CODEGUARDIAN_PRESET</code>)</td><td>Overall strictness: <code>strict</code>, <code>balanced</code> (default), <code>lenient</code>. <code>rules</code> always wins.</td></tr>
+            <tr><td><code>custom_rules</code></td><td>Project-specific regex rules (<code>id</code>, <code>title</code>, <code>pattern</code>, <code>severity</code>, <code>message</code>, <code>fix</code>, <code>paths</code>, <code>exclude</code>).</td></tr>
+            <tr><td><code>ignore.categories</code></td><td>Finding categories to always suppress.</td></tr>
+            <tr><td><code>ignore.paths</code></td><td>Path substrings/globs to suppress.</td></tr>
+            <tr><td><code>ignore.inline_marker</code></td><td>Inline suppression marker (default <code>codeguardian-ignore</code>).</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Caching, gates, notifications, output</h2>
+    <table>
+        <thead><tr><th>Key</th><th>Default</th><th>Purpose</th></tr></thead>
+        <tbody>
+            <tr><td><code>cache.ai_enabled</code></td><td><code>true</code> (<code>CODEGUARDIAN_CACHE_AI</code>)</td><td>Cache AI responses on disk (keyed by provider+model+prompt).</td></tr>
+            <tr><td><code>cache.ttl</code></td><td><code>0</code> (never)</td><td>Seconds an AI cache entry stays valid.</td></tr>
+            <tr><td><code>cache.dir</code></td><td><code>storage/codeguardian/cache/ai</code></td><td>AI cache directory.</td></tr>
+            <tr><td><code>cache.static_enabled</code></td><td><code>false</code> (<code>CODEGUARDIAN_CACHE_STATIC</code>)</td><td>Content-addressed static result cache.</td></tr>
+            <tr><td><code>cache.static_dir</code></td><td><code>storage/codeguardian/cache/static</code></td><td>Static cache directory.</td></tr>
+            <tr><td><code>gates</code></td><td>empty</td><td>CI budgets: <code>max_critical</code>, <code>max_high</code>, <code>max_total</code>, <code>max_risk</code>, <code>min_score</code>, <code>min_quality</code>.</td></tr>
+            <tr><td><code>notifications.webhook</code></td><td>'' (<code>CODEGUARDIAN_WEBHOOK_URL</code>)</td><td>Default webhook endpoint for <code>codeguardian:notify</code>.</td></tr>
+            <tr><td><code>output.report_dir</code></td><td><code>codeguardian/reports</code></td><td>Where reports are saved (under <code>storage_path()</code>).</td></tr>
+            <tr><td><code>output.tests_dir</code></td><td><code>tests/CodeGuardian</code></td><td>Where generated tests are saved.</td></tr>
+            <tr><td><code>output.format</code></td><td><code>both</code></td><td>Default format: <code>json|html|md|sarif|junit|both|all</code>.</td></tr>
+            <tr><td><code>output.history_file</code></td><td><code>storage/codeguardian/history.jsonl</code></td><td>Append-only trend history.</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Dashboard &amp; refactoring</h2>
+    <table>
+        <thead><tr><th>Key</th><th>Default</th><th>Purpose</th></tr></thead>
+        <tbody>
+            <tr><td><code>dashboard.enabled</code></td><td><code>true</code> (<code>CODEGUARDIAN_DASHBOARD</code>)</td><td>Master switch; off removes the routes.</td></tr>
+            <tr><td><code>dashboard.path</code></td><td><code>codeguardian</code> (<code>CODEGUARDIAN_DASHBOARD_PATH</code>)</td><td>URL prefix the dashboard mounts at.</td></tr>
+            <tr><td><code>dashboard.middleware</code></td><td><code>['web']</code></td><td>Middleware for dashboard routes.</td></tr>
+            <tr><td><code>dashboard.restrict_to_local</code></td><td><code>true</code> (<code>CODEGUARDIAN_DASHBOARD_LOCAL_ONLY</code>)</td><td>Local-only unless a <code>viewCodeGuardian</code> gate is defined.</td></tr>
+            <tr><td><code>dashboard.runs_dir</code></td><td><code>codeguardian/runs</code></td><td>Where run history + live logs are stored.</td></tr>
+            <tr><td><code>dashboard.php_binary</code></td><td>auto (<code>CODEGUARDIAN_PHP_BINARY</code>)</td><td>PHP binary used to launch background runs.</td></tr>
+            <tr><td><code>refactor.safe_mode</code></td><td><code>true</code> (<code>CODEGUARDIAN_SAFE_MODE</code>)</td><td>Verify each file by tests after refactor.</td></tr>
+            <tr><td><code>refactor.auto_rollback_on_fail</code></td><td><code>true</code> (<code>CODEGUARDIAN_AUTO_ROLLBACK</code>)</td><td>Roll back a file if it introduces a new test failure.</td></tr>
+        </tbody>
+    </table>
+</section>
+
+<!-- ============================ 7. COMMANDS ============================ -->
+<section class="sec" id="commands">
+    <div class="kicker">Section 7</div>
+    <h1 class="section">Command Reference</h1>
+    <p>CodeGuardian registers <strong>20 artisan commands</strong>. All are namespaced under
+    <code>codeguardian:</code>. Run any command with <code>--help</code> to see its full signature.</p>
+
+    <table>
+        <thead><tr><th style="width:34%">Command</th><th>What it does</th></tr></thead>
+        <tbody>
+            <tr><td><code>codeguardian:analyze</code></td><td>Full analysis — Principal SE + Senior DevOps + Senior QA level review.</td></tr>
+            <tr><td><code>codeguardian:security</code></td><td>Security audit — SQL injection, XSS, IDOR, broken auth, secrets.</td></tr>
+            <tr><td><code>codeguardian:performance</code></td><td>Performance review — N+1, missing indexes, cache, memory.</td></tr>
+            <tr><td><code>codeguardian:refactor</code></td><td>Analyze → write tests → refactor → verify → report (full workflow).</td></tr>
+            <tr><td><code>codeguardian:fix</code></td><td>Apply safe, deterministic auto-fixes (no AI).</td></tr>
+            <tr><td><code>codeguardian:test</code></td><td>Generate PHPUnit test stubs / AI tests with assertions.</td></tr>
+            <tr><td><code>codeguardian:report</code></td><td>Generate / regenerate HTML/JSON report from a previous scan.</td></tr>
+            <tr><td><code>codeguardian:audit</code></td><td>Audit Composer dependencies for CVEs &amp; abandoned packages.</td></tr>
+            <tr><td><code>codeguardian:review</code></td><td>AI review of changed lines only (diff-aware, low cost).</td></tr>
+            <tr><td><code>codeguardian:graph</code></td><td>Map module dependencies and detect cycles.</td></tr>
+            <tr><td><code>codeguardian:watch</code></td><td>Re-analyze changed files on every save (inner loop).</td></tr>
+            <tr><td><code>codeguardian:trend</code></td><td>Code-health trends across past runs.</td></tr>
+            <tr><td><code>codeguardian:rules</code></td><td>List rules + effective config; per-rule docs.</td></tr>
+            <tr><td><code>codeguardian:explain</code></td><td>Explain a rule — meaning, why, and fix (optional AI).</td></tr>
+            <tr><td><code>codeguardian:doctor</code></td><td>Diagnose setup &amp; suggest fixes (CI preflight).</td></tr>
+            <tr><td><code>codeguardian:init</code></td><td>Scaffold config, CI workflow, optional git hook.</td></tr>
+            <tr><td><code>codeguardian:comment</code></td><td>Post a summary comment on the current PR / MR.</td></tr>
+            <tr><td><code>codeguardian:notify</code></td><td>Send a summary to Slack / Teams / webhook.</td></tr>
+            <tr><td><code>codeguardian:config-check</code></td><td>Validate your <code>codeguardian.php</code> configuration.</td></tr>
+            <tr><td><code>codeguardian:test-impact</code></td><td>List tests impacted by changes (+ a PHPUnit <code>--filter</code>).</td></tr>
+        </tbody>
+    </table>
+
+    <h2 id="cmd-analyze"><code>codeguardian:analyze</code> — the primary command</h2>
+    <p>Key options:</p>
+    <table>
+        <thead><tr><th>Option</th><th>Effect</th></tr></thead>
+        <tbody>
+            <tr><td><code>--path=</code></td><td>Directory to analyze (default: project root).</td></tr>
+            <tr><td><code>--module=</code></td><td>Analyze a single module (e.g. <code>User</code>, <code>Order</code>).</td></tr>
+            <tr><td><code>--api=</code></td><td>Analyze APIs matching a route filter (e.g. <code>GET:/api/users</code>, <code>users</code>).</td></tr>
+            <tr><td><code>--agents=</code></td><td>Run only chosen analyzers, e.g. <code>security,performance</code>.</td></tr>
+            <tr><td><code>--changed</code> / <code>--since=</code></td><td>Incremental: only files changed vs HEAD / since a git ref.</td></tr>
+            <tr><td><code>--parallel</code> / <code>--no-parallel</code></td><td>Fan analyzers across CPU cores / force sequential.</td></tr>
+            <tr><td><code>--cache</code> / <code>--no-cache</code></td><td>Reuse static results on unchanged trees / force a fresh scan.</td></tr>
+            <tr><td><code>--format=</code></td><td><code>json|html|md|both|sarif|junit|all</code>.</td></tr>
+            <tr><td><code>--fix</code> / <code>--refactor</code></td><td>Auto-fix (safe) / start interactive refactoring after analysis.</td></tr>
+            <tr><td><code>--fail-on=</code></td><td>Exit non-zero at/above a severity (<code>critical|high|medium|low</code>).</td></tr>
+            <tr><td><code>--write-baseline</code> / <code>--against-baseline</code> / <code>--new-only</code></td><td>Baseline/diff workflow (see CI section).</td></tr>
+            <tr><td><code>--severity</code>, <code>--min-severity</code>, <code>--category</code>, <code>--confidence</code>, <code>--owasp</code>, <code>--cwe</code></td><td>Combinable finding filters (see Section 14).</td></tr>
+            <tr><td><code>--preset=</code></td><td><code>strict|balanced|lenient</code> tuning profile for this run.</td></tr>
+            <tr><td><code>--import=</code> / <code>--coverage=</code></td><td>Fold in PHPStan/Psalm JSON / flag untested complex code from Clover.</td></tr>
+            <tr><td><code>--no-report</code>, <code>--no-history</code>, <code>--no-suppress</code>, <code>--plain</code>, <code>--annotate</code>, <code>--gate</code></td><td>Output / behaviour toggles.</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Other command signatures (selected options)</h2>
+    <table>
+        <thead><tr><th>Command</th><th>Notable options</th></tr></thead>
+        <tbody>
+            <tr><td><code>codeguardian:refactor</code></td><td><code>--module=</code> <code>--api=</code> <code>--file=</code> <code>--files=</code> <code>--mode=auto</code> <code>--safe</code> <code>--no-backup</code> <code>--skip-tests</code> <code>--with-existing-tests</code></td></tr>
+            <tr><td><code>codeguardian:security</code></td><td><code>--path=</code> <code>--type=</code> <code>--output=</code> <code>--fail-on=</code> <code>--owasp=</code> <code>--cwe=</code> filters</td></tr>
+            <tr><td><code>codeguardian:performance</code></td><td><code>--path=</code> <code>--type=</code> <code>--output=</code> <code>--category=</code> filters</td></tr>
+            <tr><td><code>codeguardian:fix</code></td><td><code>--path=</code> <code>--module=</code> <code>--file=</code> <code>--dry-run</code></td></tr>
+            <tr><td><code>codeguardian:test</code></td><td><code>--path=</code> <code>--type=</code> <code>--output=</code> <code>--file=</code> <code>--dry-run</code></td></tr>
+            <tr><td><code>codeguardian:report</code></td><td><code>--last</code> <code>--file=</code> <code>--format=html|json|both</code></td></tr>
+            <tr><td><code>codeguardian:audit</code></td><td><code>--path=</code> <code>--format=json|html|md|sarif</code> <code>--output=</code> <code>--fail-on=</code></td></tr>
+            <tr><td><code>codeguardian:review</code></td><td><code>--path=</code> <code>--since=</code> <code>--output=</code></td></tr>
+            <tr><td><code>codeguardian:graph</code></td><td><code>--path=</code> <code>--format=text|mermaid|dot</code> <code>--output=</code> <code>--fail-on-cycles</code></td></tr>
+            <tr><td><code>codeguardian:watch</code></td><td><code>--path=</code> <code>--interval=2</code> <code>--ext=php</code> <code>--agents=</code></td></tr>
+            <tr><td><code>codeguardian:trend</code></td><td><code>--limit=20</code> <code>--json</code></td></tr>
+            <tr><td><code>codeguardian:rules</code></td><td><code>{rule?}</code> <code>--group=</code> <code>--enabled-only</code> <code>--json</code></td></tr>
+            <tr><td><code>codeguardian:explain</code></td><td><code>{rule}</code> <code>--ai</code> <code>--json</code></td></tr>
+            <tr><td><code>codeguardian:doctor</code></td><td><code>--path=</code> <code>--json</code></td></tr>
+            <tr><td><code>codeguardian:init</code></td><td><code>--dir=</code> <code>--ci=github|gitlab|none</code> <code>--hook</code> <code>--force</code></td></tr>
+            <tr><td><code>codeguardian:comment</code></td><td><code>--report=</code> <code>--platform=github|gitlab</code> <code>--mr=</code> <code>--dry-run</code></td></tr>
+            <tr><td><code>codeguardian:notify</code></td><td><code>--report=</code> <code>--url=</code> <code>--format=slack|teams|generic</code> <code>--dry-run</code></td></tr>
+            <tr><td><code>codeguardian:config-check</code></td><td><code>--json</code></td></tr>
+            <tr><td><code>codeguardian:test-impact</code></td><td><code>--path=</code> <code>--since=</code> <code>--tests-dir=</code> <code>--filter</code></td></tr>
+        </tbody>
+    </table>
+</section>
+
+<!-- ============================ 8. DETECT ============================ -->
+<section class="sec" id="detect">
+    <div class="kicker">Section 8</div>
+    <h1 class="section">What It Detects</h1>
+    <table>
+        <thead><tr><th style="width:20%">Analyzer</th><th>What it finds</th></tr></thead>
+        <tbody>
+            <tr><td><strong>Architecture</strong></td><td>Fat controllers (&gt;150 lines), missing service layer, direct DB in controllers, inline validation, facade overuse, business/integration logic in models, <code>env()</code> used outside <code>config/</code> (null after <code>config:cache</code>).</td></tr>
+            <tr><td><strong>Security</strong></td><td>SQL injection, XSS <code>{!! !!}</code>, hardcoded secrets &amp; API keys, mass assignment (<code>$request-&gt;all()</code> and <code>$guarded = []</code>), missing authorization, debug code, insecure uploads, command injection, code injection (<code>eval</code>), insecure deserialization, weak crypto (md5/sha1 on secrets), predictable randomness for tokens, path traversal, SSRF, open redirect, blanket CSRF exemption, hard-enabled debug, dynamic file inclusion, disabled TLS verification.</td></tr>
+            <tr><td><strong>Performance</strong></td><td>N+1 queries, query-in-loop (whereIn batching), over-fetching (<code>::all()-&gt;filter()</code>), nested loops (O(n²)), <code>Model::all()</code> without pagination, <code>count()</code> on loaded collections, missing eager loading, exports without chunking.</td></tr>
+            <tr><td><strong>Tech Debt</strong></td><td>Large/God classes, high cyclomatic complexity, duplicated code blocks, TODO/FIXME debt, dead code, missing return types, magic numbers, deep nesting, long parameter lists, boolean-flag parameters, empty/swallowed catch blocks.</td></tr>
+            <tr><td><strong>Database</strong></td><td>Irreversible migrations (no <code>down()</code>), unindexed foreign keys, money as <code>float</code>/<code>double</code>, hard-to-evolve <code>enum</code> columns, missing unique indexes on lookup columns, fully unguarded models.</td></tr>
+            <tr><td><strong>Flutter / Dart</strong></td><td><code>print()</code> in production, <code>setState()</code> inside <code>build()</code>, oversized <code>build()</code> methods, <code>BuildContext</code> used across an async gap.</td></tr>
+            <tr><td><strong>Test Generator</strong></td><td>PHPUnit stubs from method signatures (controller, service, model, generic).</td></tr>
+            <tr><td><strong>Refactoring</strong></td><td>Auto-fixes (<code>$request-&gt;all()</code> → <code>validated()</code>, remove <code>dd()</code>/<code>dump()</code>); reports manual fixes for the rest.</td></tr>
+        </tbody>
+    </table>
+    <div class="callout tip"><strong>Security taxonomy.</strong> Every security finding is mapped to its
+    OWASP Top 10 (2021) category and a CWE id, with an indicative CVSS band, a confidence level,
+    expected impact, estimated effort, and breaking-change risk — so findings are triage-ready.</div>
+</section>
+
+<!-- ============================ 9. RESULTS ============================ -->
+<section class="sec" id="results">
+    <div class="kicker">Section 9</div>
+    <h1 class="section">Understanding the Results</h1>
+
+    <h2>Severity levels</h2>
+    <table>
+        <thead><tr><th>Level</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td><span class="badge b-crit">CRITICAL</span></td><td>Must fix before production (SQL injection, hardcoded secrets, …).</td></tr>
+            <tr><td><span class="badge b-high">HIGH</span></td><td>Significant architectural or security problem.</td></tr>
+            <tr><td><span class="badge b-med">MEDIUM</span></td><td>Code-quality issue that should be addressed.</td></tr>
+            <tr><td><span class="badge b-low">LOW</span></td><td>Minor improvement (style, naming, …).</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Score &amp; grade</h2>
+    <table>
+        <thead><tr><th>Score</th><th>Grade</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td>90–100</td><td>A</td><td>Excellent</td></tr>
+            <tr><td>80–89</td><td>B</td><td>Good</td></tr>
+            <tr><td>70–79</td><td>C</td><td>Acceptable</td></tr>
+            <tr><td>60–69</td><td>D</td><td>Needs work</td></tr>
+            <tr><td>&lt; 60</td><td>F</td><td>Needs significant refactoring</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Anatomy of a finding</h2>
+    <p>Every finding carries the context an engineer needs to triage and fix it:</p>
+    <table>
+        <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td><code>severity</code></td><td>critical / high / medium / low</td></tr>
+            <tr><td><code>confidence</code></td><td>high / medium / low — how sure the rule is</td></tr>
+            <tr><td><code>category</code></td><td>machine-readable type, e.g. <code>sql_injection</code>, <code>n_plus_one</code>, <code>god_class</code></td></tr>
+            <tr><td><code>description</code></td><td>why it matters, with the offending line number</td></tr>
+            <tr><td><code>root_cause</code></td><td>the underlying reason it happens</td></tr>
+            <tr><td><code>code_snippet</code></td><td>the evidence (the offending line)</td></tr>
+            <tr><td><code>recommendation</code></td><td>the suggested fix</td></tr>
+            <tr><td><code>code_before</code> / <code>code_after</code></td><td>a concrete better implementation</td></tr>
+            <tr><td><code>impact</code></td><td>the expected benefit of fixing it</td></tr>
+            <tr><td><code>effort</code></td><td>trivial / small / medium / large</td></tr>
+            <tr><td><code>breaking_risk</code></td><td>none / low / medium / high</td></tr>
+            <tr><td><code>cwe</code> / <code>owasp</code></td><td>security taxonomy</td></tr>
+            <tr><td><code>principle</code></td><td>the engineering principle involved (SOLID:SRP, Clean Code, …)</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Risk score (explainable)</h2>
+    <p>Alongside the quality scores (how good the code is), <code>analyze</code> produces a risk score
+    (0–100, how urgently it needs attention), weighted by severity × confidence, with reasoning:</p>
+    <pre>  <span class="t">Risk Score: 62/100  (CRITICAL)</span>
+    • 2 critical finding(s) drive the risk to its ceiling — these should block release.
+    • Concentrated in: sql injection (2), n plus one (3), missing types (4).
+    • Weighted across 14 finding(s) by severity × confidence.</pre>
+
+    <h2>Example console output</h2>
+    <pre><span class="t">CodeGuardian AI — Analyze. Improve. Validate. Report.</span>
+
+📁 Scanning: /var/www/my-project/app/Http/Controllers
+🔧 Project type: laravel  |  Scope: Full project
+🔍 Engine: ⚡ Static engine (no API key needed)
+
+  Scanning files...
+  ✔  Found 17 files (1259 lines)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  <span class="t">ANALYSIS SUMMARY</span>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Overall Score: 54/100  (Grade: F)
+  Total Issues: 23   🔴 2  🟠 7  🟡 9  🟢 5
+
+  TOP FINDINGS:
+  [CRITICAL] Hardcoded secret/credential detected   → PaymentController.php:45
+  [CRITICAL] Potential SQL Injection vulnerability  → ReportController.php:112
+  [HIGH] Fat Controller: OrderController (312 lines) → OrderController.php
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</pre>
+</section>
+
+<!-- ============================ 10. CLI ============================ -->
+<section class="sec" id="cli">
+    <div class="kicker">Section 10</div>
+    <h1 class="section">Premium CLI Experience</h1>
+    <p><code>analyze</code>, <code>security</code>, and <code>performance</code> render a live, multi-stage
+    pipeline — spinners, per-stage timers, an overall progress bar, ETA, the file currently being
+    analyzed, and live counters — followed by an execution-stats card.</p>
+    <pre>  CodeGuardian · Static analysis · Security Analysis  █████████████░░░░ 62%  elapsed 193ms · ETA 64ms
+  ├─ ✓ Architecture Analysis   45 findings · 56ms
+  ├─ ✓ Security Analysis       26 findings · 88ms
+  ├─ ⠹ Performance Analysis    12/17  PaymentService.php
+  └─ ○ Tech-Debt Analysis
+     files 17 · rule groups 4 · suggestions 71
+
+  ┌─ Execution stats ───────────────────────────────┐
+  │ ✓ Architecture Analysis  ██░░░░░░░░    56ms · 22% │
+  │ ✓ Security Analysis      ████░░░░░░    88ms · 35% │
+  │ Total 254ms · 17 files · 67/s throughput · 4 rules│
+  └─────────────────────────────────────────────────┘</pre>
+    <p>It is <strong>TTY-aware</strong>: in CI, pipes, or log files it degrades to clean one-line-per-stage
+    logging automatically. Force that anywhere with <code>--plain</code>.</p>
+
+    <h2>Execution flow</h2>
+    <pre>Project Discovery → Scanning → ┌ Architecture ┐
+                               │ Security      │  (live per-file ticks)
+                               │ Performance   │
+                               └ Tech-Debt     ┘ → Risk Scoring → Report Generation</pre>
+
+    <h2>Refactoring pipeline (7 stages)</h2>
+    <p>Project Discovery → Static Analysis → Test Generation → Baseline Tests → Refactoring →
+    Final Verification → Report Generation. Every recommended change ships with a
+    <strong>justification card</strong>:</p>
+    <pre>  <span class="t">CRITICAL Possible OS command injection</span>
+    Why        Untrusted data reaches an OS command sink.
+    Benefit    Prevents remote code execution on the server.
+    Breaking   medium      Effort  medium      Confidence high
+    Standard   OWASP A03:2021-Injection · CWE-78
+    Fix        Use escapeshellarg() on every argument, or Symfony Process.</pre>
+</section>
+
+<!-- ============================ 11. REPORTING ============================ -->
+<section class="sec" id="reporting">
+    <div class="kicker">Section 11</div>
+    <h1 class="section">Enterprise Reporting</h1>
+    <p>Every analysis produces an enterprise-quality report with an executive summary and a
+    six-dimension quality scorecard, each with a 0–100 score, a letter grade, and reasoning.</p>
+    <table>
+        <thead><tr><th>Dimension</th><th>What it measures</th></tr></thead>
+        <tbody>
+            <tr><td><strong>Architecture</strong></td><td>Structure, layering, SOLID, coupling</td></tr>
+            <tr><td><strong>Security</strong></td><td>Resistance to OWASP Top 10 / known weaknesses</td></tr>
+            <tr><td><strong>Performance</strong></td><td>Query efficiency, CPU cost, scalability</td></tr>
+            <tr><td><strong>Maintainability</strong></td><td>Complexity, duplication, readability</td></tr>
+            <tr><td><strong>Testability</strong></td><td>How easily the code can be unit-tested</td></tr>
+            <tr><td><strong>Reliability</strong></td><td>Error handling and operational fail-safes</td></tr>
+        </tbody>
+    </table>
+    <pre>  QUALITY DIMENSIONS:
+  Architecture     ██████████░░░░░░   64/100  (D)
+  Security         █████░░░░░░░░░░░   34/100  (F)
+  Performance      █████████████░░░   82/100  (B)
+  Maintainability  ████████░░░░░░░░   55/100  (F)
+  Testability      ███████░░░░░░░░░   48/100  (F)
+  Reliability      ████████████░░░░   72/100  (C)
+  Composite quality: 59/100  (Grade F)</pre>
+
+    <h2>Output formats</h2>
+    <table>
+        <thead><tr><th>Format</th><th>Use case</th></tr></thead>
+        <tbody>
+            <tr><td><code>--format=json</code></td><td>Machine-readable — full finding metadata.</td></tr>
+            <tr><td><code>--format=html</code></td><td>Rich interactive dashboard with search, severity filter, collapsible sections, and an embedded quality-score sparkline.</td></tr>
+            <tr><td><code>--format=md</code></td><td>Markdown — ideal for CI artifacts / PR comments.</td></tr>
+            <tr><td><code>--format=both</code></td><td>json + html (default).</td></tr>
+            <tr><td><code>--format=sarif</code></td><td>SARIF 2.1.0 — GitHub / GitLab / Azure code-scanning.</td></tr>
+            <tr><td><code>--format=junit</code></td><td>JUnit XML — CI "Tests" panels.</td></tr>
+            <tr><td><code>--format=all</code></td><td>json + html + md + sarif + junit.</td></tr>
+        </tbody>
+    </table>
+    <p>Reports are saved under <code>storage/codeguardian/reports/</code> by default.</p>
+</section>
+
+<!-- ============================ 12. DASHBOARD ============================ -->
+<section class="sec" id="dashboard">
+    <div class="kicker">Section 12</div>
+    <h1 class="section">Web Dashboard</h1>
+    <p>Prefer a UI over the terminal? CodeGuardian ships a built-in dashboard. After installing the
+    package, open <code>https://your-app.test/codeguardian</code>.</p>
+
+    <h2>What you can do</h2>
+    <ul>
+        <li><strong>Run everything from the browser</strong> — analyze, security audit, performance review, generate tests, and refactor. Targets are chosen from searchable dropdowns (modules, API routes, web routes, artisan commands).</li>
+        <li><strong>Watch live progress</strong> — each run executes in the background and streams its console output to the page in real time.</li>
+        <li><strong>Browse full history</strong> — every past run with its type, target, status, and saved HTML/JSON report; the history page shows a project-health snapshot (score, risk, open issues, trend).</li>
+        <li><strong>Explore findings interactively</strong> — a completed analyze run gets a Findings Explorer: filter by severity, search by title/file/category, and read each issue with its location and recommendation.</li>
+        <li><strong>Track trends on the Insights page</strong> (<code>/codeguardian/insights</code>) — quality-score and risk trend charts, severity and top-category breakdowns, quality dimensions, and hotspot files.</li>
+        <li><strong>Fix from the UI</strong> — a completed analyze run shows a "Fix these issues" panel. Select specific files or fix the whole scope; either way it launches the same safe, test-verified refactor.</li>
+    </ul>
+
+    <h2>Security</h2>
+    <p>The dashboard is <strong>local-only by default</strong> (reachable only when <code>APP_ENV=local</code>). To control access:</p>
+    <ul>
+        <li>Define a Gate named <code>viewCodeGuardian</code> in your <code>AuthServiceProvider</code> (takes precedence; restrict by user/role), <strong>or</strong></li>
+        <li>Set <code>CODEGUARDIAN_DASHBOARD_LOCAL_ONLY=false</code> to open it (combine with the gate or your own middleware for production).</li>
+    </ul>
+    <pre><span class="t">'dashboard'</span> =&gt; [
+    <span class="t">'enabled'</span>           =&gt; env(<span class="s">'CODEGUARDIAN_DASHBOARD'</span>, true),
+    <span class="t">'path'</span>              =&gt; env(<span class="s">'CODEGUARDIAN_DASHBOARD_PATH'</span>, <span class="s">'codeguardian'</span>),
+    <span class="t">'middleware'</span>        =&gt; [<span class="s">'web'</span>],
+    <span class="t">'restrict_to_local'</span> =&gt; env(<span class="s">'CODEGUARDIAN_DASHBOARD_LOCAL_ONLY'</span>, true),
+];</pre>
+    <p>Customise the UI by publishing the views: <code>php artisan vendor:publish --tag=codeguardian-views</code>.</p>
+</section>
+
+<!-- ============================ 13. REFACTOR ============================ -->
+<section class="sec" id="refactor">
+    <div class="kicker">Section 13</div>
+    <h1 class="section">Foolproof Refactoring</h1>
+    <p>Refactors run a <strong>test → refactor → verify</strong> loop so a change that breaks a test never ships:</p>
+    <ol>
+        <li>Generate test stubs for the files in scope.</li>
+        <li>Establish a baseline (pre-existing failures are ignored — only NEW failures count).</li>
+        <li>Refactor each file (static auto-fixes + AI deep refactor).</li>
+        <li>Re-run tests; if a file's refactor introduces a new failure, it is automatically rolled back to the original.</li>
+    </ol>
+    <p>Enabled automatically from the dashboard, with <code>--safe</code>, in <code>--mode=auto</code>, or via config (<code>refactor.safe_mode</code>, <code>refactor.auto_rollback_on_fail</code>).</p>
+
+    <h2>The full interactive workflow</h2>
+    <pre>1. Analyze code     → find all issues
+2. Show report      → ask confirmation to proceed
+3. Generate tests   → write test stubs BEFORE changing any code
+4. Run tests        → establish baseline (passes/fails)
+5. Refactor         → fix one file at a time (ask per file in interactive mode)
+6. Run tests again  → verify nothing broke (rollback / continue / stop on failure)
+7. Final report     → before/after summary saved to storage/codeguardian/reports/</pre>
+
+    <h2>Targeting</h2>
+    <pre><span class="k">php</span> artisan codeguardian:refactor --module=Order
+<span class="k">php</span> artisan codeguardian:refactor --api=v1/auth/login --safe
+<span class="k">php</span> artisan codeguardian:refactor --file=app/Services/AuthService.php
+<span class="k">php</span> artisan codeguardian:refactor --files=<span class="s">"app/Services/AuthService.php,app/Http/Controllers/Auth/LoginController.php"</span> --safe</pre>
+    <p><code>--files=</code> / <code>--file=</code> trace each file's dependency chain (via Reflection) and
+    refactor them together.</p>
+
+    <h2>Deterministic fixes (no AI)</h2>
+    <pre><span class="k">php</span> artisan codeguardian:fix --dry-run    <span class="c"># preview the safe mechanical fixes</span>
+<span class="k">php</span> artisan codeguardian:fix              <span class="c"># apply (keeps a .cgbak backup per file)</span></pre>
+    <p><code>codeguardian:fix</code> applies only deterministic, rule-based transforms; every change is
+    syntax-validated before writing, so the engine never produces broken PHP.</p>
+</section>
+
+<!-- ============================ 14. FILTER ============================ -->
+<section class="sec" id="filter">
+    <div class="kicker">Section 14</div>
+    <h1 class="section">Filtering &amp; Suppression</h1>
+    <h2>Filters (change what's shown)</h2>
+    <p>Filters are AND-combined; each CSV value is OR-combined.</p>
+    <table>
+        <thead><tr><th>Flag</th><th>Example</th><th>Keeps</th></tr></thead>
+        <tbody>
+            <tr><td><code>--severity</code></td><td><code>--severity=critical,high</code></td><td>only those severities</td></tr>
+            <tr><td><code>--min-severity</code></td><td><code>--min-severity=high</code></td><td>at or above that severity</td></tr>
+            <tr><td><code>--category</code></td><td><code>--category=sql_injection,n_plus_one</code></td><td>categories matching any substring</td></tr>
+            <tr><td><code>--confidence</code></td><td><code>--confidence=high</code></td><td>findings at that confidence</td></tr>
+            <tr><td><code>--owasp</code></td><td><code>--owasp=A03,A01</code></td><td>security findings in those OWASP categories</td></tr>
+            <tr><td><code>--cwe</code></td><td><code>--cwe=CWE-89</code></td><td>findings with that CWE id</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Suppression (remove entirely — from scores, reports, CI exit codes)</h2>
+    <pre><span class="c">// config/codeguardian.php</span>
+<span class="t">'ignore'</span> =&gt; [
+    <span class="t">'categories'</span> =&gt; [<span class="s">'magic_numbers'</span>, <span class="s">'commented_code'</span>],
+    <span class="t">'paths'</span>      =&gt; [<span class="s">'database/migrations/'</span>, <span class="s">'tests/*'</span>],
+],</pre>
+    <p>Inline, right in the source:</p>
+    <pre>$hash = md5($value);                 <span class="c">// codeguardian-ignore weak_cryptography</span>
+<span class="c">// codeguardian-ignore-file</span>          <span class="c"># suppresses every finding in this file</span></pre>
+    <p>A bare <code>// codeguardian-ignore</code> suppresses any finding on that line; adding category
+    names limits it. Use <code>--no-suppress</code> to temporarily see everything.</p>
+</section>
+
+<!-- ============================ 15. RULES ============================ -->
+<section class="sec" id="rules">
+    <div class="kicker">Section 15</div>
+    <h1 class="section">Rule Configuration</h1>
+    <p>Take full control of the engine from config — no code changes. Rules are keyed by their finding
+    category; list them all with <code>php artisan codeguardian:rules</code>.</p>
+    <pre><span class="c">// config/codeguardian.php</span>
+<span class="t">'rules'</span> =&gt; [
+    <span class="t">'magic_numbers'</span> =&gt; false,        <span class="c">// turn a rule off entirely</span>
+    <span class="t">'missing_types'</span> =&gt; <span class="s">'low'</span>,        <span class="c">// downgrade severity</span>
+    <span class="t">'n_plus_one'</span>    =&gt; <span class="s">'critical'</span>,   <span class="c">// upgrade severity</span>
+    <span class="t">'todo_debt'</span>     =&gt; [<span class="t">'enabled'</span> =&gt; true, <span class="t">'severity'</span> =&gt; <span class="s">'low'</span>],
+],</pre>
+    <pre><span class="k">php</span> artisan codeguardian:rules                       <span class="c"># full catalog + effective state</span>
+<span class="k">php</span> artisan codeguardian:rules --group=security      <span class="c"># one analyzer group</span>
+<span class="k">php</span> artisan codeguardian:rules sql_injection         <span class="c"># full docs for one rule</span></pre>
+    <p>Severity overrides apply <em>before</em> scoring, filters, and CI gates.</p>
+
+    <h2>Tuning presets</h2>
+    <pre><span class="k">php</span> artisan codeguardian:analyze --preset=strict    <span class="c"># maintainability debt first-class</span>
+<span class="k">php</span> artisan codeguardian:analyze --preset=lenient   <span class="c"># mute the noisiest low-value rules</span></pre>
+
+    <h2>Custom rules (no PHP)</h2>
+    <p>Define project-specific detection rules in <code>config('codeguardian.custom_rules')</code>. Each
+    rule scans file contents with a regex and emits a finding (severity, message, fix, path filters).
+    They flow through scoring, filters, suppression, and CI gates like built-in rules.</p>
+
+    <h2>Per-rule documentation</h2>
+    <p>Every rule ships with a short explainer — what it means, why it matters, how to fix it, and
+    authoritative references (OWASP / CWE / Laravel docs). HTML reports link each finding to its docs
+    via a "Learn more" link.</p>
+</section>
+
+<!-- ============================ 16. CI ============================ -->
+<section class="sec" id="ci">
+    <div class="kicker">Section 16</div>
+    <h1 class="section">Continuous Integration</h1>
+
+    <h2>SARIF — GitHub / GitLab / Azure</h2>
+    <p><code>--format=sarif</code> emits schema-valid SARIF 2.1.0 with <code>security-severity</code>,
+    stable <code>partialFingerprint</code>s, CWE/OWASP <code>helpUri</code>s, and one-click
+    <code>fixes[]</code> where a concrete replacement exists.</p>
+    <pre><span class="c"># GitHub Actions</span>
+- run: php artisan codeguardian:analyze --format=sarif --plain
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: storage/codeguardian/reports</pre>
+
+    <h2>Baseline / diff — fail only on new findings</h2>
+    <pre><span class="c"># once, on a clean main branch — commit the file</span>
+<span class="k">php</span> artisan codeguardian:analyze --write-baseline
+
+<span class="c"># in CI on every PR — non-zero exit only if NEW findings appear</span>
+<span class="k">php</span> artisan codeguardian:analyze --against-baseline --new-only --plain</pre>
+    <p>Fingerprints are line-number-independent (category + file + title + normalised snippet). The
+    summary reports new / existing / fixed counts.</p>
+
+    <h2>Quality gates / budgets</h2>
+    <pre><span class="t">'gates'</span> =&gt; [
+    <span class="t">'max_critical'</span> =&gt; 0,
+    <span class="t">'max_high'</span>     =&gt; 5,
+    <span class="t">'max_total'</span>    =&gt; 200,
+    <span class="t">'max_risk'</span>     =&gt; 60,   <span class="c">// 0–100</span>
+    <span class="t">'min_score'</span>    =&gt; 70,   <span class="c">// 0–100</span>
+    <span class="t">'min_quality'</span>  =&gt; 70,   <span class="c">// composite 0–100</span>
+],</pre>
+    <p>Any breach prints the violated budgets and exits non-zero.</p>
+
+    <h2>Other CI integrations</h2>
+    <ul>
+        <li><strong>Inline PR annotations</strong> — <code>--annotate</code> (auto in GitHub Actions) renders findings on the "Files changed" view, no upload.</li>
+        <li><strong>PR / MR comment</strong> — <code>codeguardian:comment</code> posts a Markdown summary (auto-detects GitHub/GitLab; updates its previous comment).</li>
+        <li><strong>JUnit panels</strong> — <code>--format=junit</code> lights up native test-report UIs.</li>
+        <li><strong>Dependency audit</strong> — <code>codeguardian:audit --fail-on=high</code> scans <code>composer.lock</code> for CVEs and abandoned packages.</li>
+        <li><strong>Doctor preflight</strong> — <code>codeguardian:doctor --json</code> returns non-zero on hard failures.</li>
+        <li><strong>Test impact</strong> — <code>codeguardian:test-impact --filter</code> emits a PHPUnit filter to run only affected tests.</li>
+    </ul>
+    <p><strong>Exit codes:</strong> <code>0</code> = success (no issues at/above <code>--fail-on</code>); <code>1</code> = issues found at the specified level / gate breached / hard error.</p>
+</section>
+
+<!-- ============================ 17. AI ============================ -->
+<section class="sec" id="ai">
+    <div class="kicker">Section 17</div>
+    <h1 class="section">AI Mode (Optional)</h1>
+    <p>For richer, intent-aware recommendations, add an API key and switch mode:</p>
+    <pre><span class="t">CODEGUARDIAN_MODE</span>=ai
+<span class="t">CODEGUARDIAN_PROVIDER</span>=openai       <span class="c"># or: claude, gemini</span>
+<span class="t">CODEGUARDIAN_OPENAI_KEY</span>=sk-...</pre>
+    <pre><span class="k">php</span> artisan codeguardian:analyze --mode=ai
+<span class="k">php</span> artisan codeguardian:analyze --mode=hybrid   <span class="c"># static first, AI enriches</span></pre>
+    <table>
+        <thead><tr><th>Provider</th><th>Default model</th><th>Notes</th></tr></thead>
+        <tbody>
+            <tr><td>OpenAI</td><td><code>gpt-4o</code></td><td>General-purpose, strong code reasoning.</td></tr>
+            <tr><td>Claude (Anthropic)</td><td><code>claude-opus-4-5</code></td><td>Large output budget — ideal for full-file refactors.</td></tr>
+            <tr><td>Gemini (Google)</td><td><code>gemini-1.5-flash</code></td><td>Free tier available; fast.</td></tr>
+        </tbody>
+    </table>
+    <h2>Cost controls</h2>
+    <ul>
+        <li><strong>AI response cache</strong> — identical prompts are served from disk for $0 (model is part of the key).</li>
+        <li><strong>Diff-only review</strong> — <code>codeguardian:review</code> sends only changed lines, far cheaper than re-reviewing whole files.</li>
+        <li><strong>Usage meter</strong> — every AI run prints token usage and estimated cost (<code>💰 AI usage: … ~$0.0123</code>); tune the price table via <code>config('codeguardian.pricing')</code>.</li>
+    </ul>
+    <div class="callout">Static mode finds the same structural issues as AI mode for most common
+    patterns. AI mode adds natural-language summaries and catches subtler logic issues that require
+    understanding program intent. If a key is missing or a model 404s, AI commands fall back to static.</div>
+</section>
+
+<!-- ============================ 18. ARCH ============================ -->
+<section class="sec" id="arch">
+    <div class="kicker">Section 18</div>
+    <h1 class="section">Architecture &amp; How It Works</h1>
+    <p>The package is a rule-based static-analysis engine built on PHP token scanning, AST parsing
+    (<code>nikic/php-parser</code>), and pattern matching — with an optional AI layer on top.</p>
+
+    <h2>Core components</h2>
+    <table>
+        <thead><tr><th>Component</th><th>Responsibility</th></tr></thead>
+        <tbody>
+            <tr><td><code>StaticOrchestrator</code></td><td>Runs all analyzers, merges results, computes scores, drives deterministic auto-fixes, and supports parallel execution.</td></tr>
+            <tr><td><code>ArchitectureAnalyzer</code></td><td>Lines/methods per class, DB-in-controller detection, FormRequest usage, layering checks.</td></tr>
+            <tr><td><code>SecurityAnalyzer</code></td><td>Injection/secret/XSS patterns mapped to OWASP/CWE with confidence.</td></tr>
+            <tr><td><code>PerformanceAnalyzer</code></td><td>N+1, queries-in-loops, unpaginated reads, collection mis-use.</td></tr>
+            <tr><td><code>TechDebtAnalyzer</code></td><td>Cyclomatic complexity, duplication, nesting, TODOs, dead code.</td></tr>
+            <tr><td><code>DatabaseAnalyzer</code></td><td>Migration/schema/model review.</td></tr>
+            <tr><td><code>DartAnalyzer</code></td><td>Flutter/Dart-specific rules (auto-enabled with <code>*.dart</code>).</td></tr>
+            <tr><td><code>StaticTestGenerator</code></td><td>PHPUnit stubs from class/method signatures with correct namespaces.</td></tr>
+            <tr><td><code>RefactorAgent</code> / <code>AiClient</code></td><td>AI-driven deep refactoring and provider abstraction (OpenAI/Claude/Gemini) with response caching and robust JSON extraction.</td></tr>
+            <tr><td><code>RouteResolver</code> / <code>DependencyTracer</code></td><td>Laravel-router URI → controller resolution and Reflection-based call-chain tracing for <code>--api</code>/<code>--file</code> scope.</td></tr>
+            <tr><td><code>QualityScorer</code> / <code>RiskScorer</code></td><td>Six-dimension scorecard and explainable risk rating.</td></tr>
+            <tr><td>Supporting utilities</td><td><code>Baseline</code>, <code>Suppressor</code>, <code>RuleRegistry</code>, <code>HistoryStore</code>, <code>DashboardInsights</code>, <code>QualityGate</code>, <code>DependencyAudit</code>, <code>DependencyGraph</code>, <code>GitDiff</code>, <code>Coverage</code>, <code>ExternalFindings</code>, <code>UsageMeter</code>, formatters (SARIF/JUnit/Markdown/HTML/annotations).</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Repository layout</h2>
+    <pre>codeguardian-laravel/
+├─ src/
+│  ├─ Analyzers/      static analyzers + Severity + result types
+│  ├─ Agents/         AI agents (RefactorAgent, base agent)
+│  ├─ Commands/       20 artisan commands
+│  ├─ Console/        live pipeline / progress rendering
+│  ├─ Http/           dashboard controllers + middleware
+│  ├─ Support/        engine utilities, formatters, stores
+│  └─ CodeGuardianServiceProvider.php
+├─ config/codeguardian.php
+├─ resources/views/   dashboard Blade views
+├─ routes/web.php     dashboard routes
+├─ tests/             Unit + Integration (Orchestra Testbench)
+└─ composer.json</pre>
+    <p>The test suite covers analyzers, support utilities, commands, and the dashboard
+    (Unit + Integration), guarding against regressions and false positives.</p>
+</section>
+
+<!-- ============================ 19. EXTEND ============================ -->
+<section class="sec" id="extend">
+    <div class="kicker">Section 19</div>
+    <h1 class="section">Extending the Engine</h1>
+    <p>Adding a rule is a localized change to one analyzer:</p>
+    <ol>
+        <li>Open the relevant analyzer in <code>src/Analyzers/</code>.</li>
+        <li>Add a <code>private function checkYourRule(string $filePath, string $content): void</code> and call it from <code>analyze()</code>.</li>
+        <li>Emit findings via <code>AnalysisResult::make()</code> with full metadata.</li>
+        <li>Add a unit test in <code>tests/Unit/Analyzers/</code> — positive fixture finds it, clean fixture does not.</li>
+    </ol>
+    <pre>$this-&gt;addResult(AnalysisResult::make(
+    category:       <span class="s">'my_rule'</span>,
+    severity:       <span class="s">'high'</span>,
+    title:          <span class="s">'Short, specific title'</span>,
+    description:    <span class="s">'Why it matters, with the line number.'</span>,
+    file:           $filePath,
+    lineStart:      $lineNum + 1,
+    recommendation: <span class="s">'The concrete fix.'</span>,
+    confidence:     <span class="s">'high'</span>,
+    impact:         <span class="s">'What fixing it buys you.'</span>,
+    effort:         <span class="s">'small'</span>,
+    breakingRisk:   <span class="s">'low'</span>,
+    cwe:            <span class="s">'CWE-123'</span>,        <span class="c">// security rules</span>
+    owasp:          <span class="s">'A01:2021-...'</span>,   <span class="c">// security rules</span>
+    principle:      <span class="s">'SOLID:SRP'</span>,      <span class="c">// design rules</span>
+));</pre>
+    <div class="callout tip">Design principle for new rules: <strong>high confidence, low false
+    positives</strong>. When a pattern is ambiguous, gate it on a taint/context signal and set
+    <code>confidence</code> accordingly rather than emitting a noisy finding.</div>
+    <p>For most teams, <strong>custom regex rules</strong> in config (Section 15) are enough — no PHP
+    required.</p>
+</section>
+
+<!-- ============================ 20. TROUBLE ============================ -->
+<section class="sec" id="trouble">
+    <div class="kicker">Section 20</div>
+    <h1 class="section">Troubleshooting</h1>
+    <table>
+        <thead><tr><th style="width:34%">Symptom</th><th>Cause / Fix</th></tr></thead>
+        <tbody>
+            <tr><td><code>No issues found</code> on a large codebase in seconds</td><td>You're in <code>static</code> mode (expected — it's fast). For deeper, intent-aware review add an API key and use <code>--mode=hybrid</code>.</td></tr>
+            <tr><td><code>--api=...</code> analyzes unrelated files</td><td>Route resolution falls back to regex if the Laravel router can't resolve the URI. Verify the route with <code>php artisan route:list</code>.</td></tr>
+            <tr><td>Reports not generated</td><td>Check write permissions on <code>storage/codeguardian/</code>, or pass <code>--output=</code> to a writable directory.</td></tr>
+            <tr><td>Too much noise</td><td>Use filters: <code>--min-severity=high</code>, <code>--confidence=high</code>, or <code>--category=</code>.</td></tr>
+            <tr><td>AI mode falls back to static</td><td>No/invalid API key, or the model returned 404. Check <code>CODEGUARDIAN_PROVIDER</code> and the matching key.</td></tr>
+            <tr><td>Dashboard returns 403</td><td>It's local-only by default. Set <code>APP_ENV=local</code>, define a <code>viewCodeGuardian</code> gate, or set <code>CODEGUARDIAN_DASHBOARD_LOCAL_ONLY=false</code>.</td></tr>
+            <tr><td>Live UI looks garbled in CI logs</td><td>CI isn't a TTY; the tool auto-switches to plain logging. Force with <code>--plain</code>.</td></tr>
+            <tr><td><code>env()</code> finding in app code</td><td>Intentional rule — <code>env()</code> returns null after <code>config:cache</code>. Move the value into <code>config/*.php</code> and read via <code>config()</code>.</td></tr>
+        </tbody>
+    </table>
+</section>
+
+<!-- ============================ 21. FAQ ============================ -->
+<section class="sec" id="faq">
+    <div class="kicker">Section 21</div>
+    <h1 class="section">Frequently Asked Questions</h1>
+    <h3>Does it need an API key?</h3>
+    <p>No. The default <code>static</code> engine runs fully offline with zero cost. An API key only unlocks the optional <code>hybrid</code>/<code>ai</code> modes.</p>
+    <h3>Will it modify my code during analysis?</h3>
+    <p>No. <code>analyze</code>, <code>security</code>, and <code>performance</code> are strictly read-only. Only <code>refactor</code> and <code>fix</code> write — and refactor runs a test-first safety net with automatic rollback.</p>
+    <h3>How do I reduce noise?</h3>
+    <p>Use filters (<code>--min-severity=high</code>, <code>--confidence=high</code>, <code>--category=</code>) or suppression (config + inline comments).</p>
+    <h3>How do I run only part of the analysis?</h3>
+    <p><code>--agents=security,performance</code>, or the dedicated <code>codeguardian:security</code> / <code>codeguardian:performance</code> commands.</p>
+    <h3>Can I add my own rules?</h3>
+    <p>Yes — config-based custom regex rules (no PHP), or a small method on an analyzer plus a unit test.</p>
+    <h3>Which Laravel / PHP versions are supported?</h3>
+    <p>PHP <code>^8.1</code> and Laravel 9 / 10 / 11.</p>
+    <h3>How do I make CI fail on regressions only?</h3>
+    <p>Record a baseline once, then run <code>--against-baseline --new-only --fail-on=high</code> on PRs.</p>
+</section>
+
+<!-- ============================ 22. APPENDIX ============================ -->
+<section class="sec" id="appendix">
+    <div class="kicker">Section 22</div>
+    <h1 class="section">Appendix</h1>
+
+    <h2>Environment variable reference</h2>
+    <table>
+        <thead><tr><th>Variable</th><th>Default</th></tr></thead>
+        <tbody>
+            <tr><td><code>CODEGUARDIAN_MODE</code></td><td><code>static</code></td></tr>
+            <tr><td><code>CODEGUARDIAN_PROVIDER</code></td><td><code>openai</code></td></tr>
+            <tr><td><code>CODEGUARDIAN_OPENAI_KEY</code> / <code>_CLAUDE_KEY</code> / <code>_GEMINI_KEY</code></td><td>—</td></tr>
+            <tr><td><code>CODEGUARDIAN_OPENAI_MODEL</code> / <code>_CLAUDE_MODEL</code> / <code>_GEMINI_MODEL</code></td><td>gpt-4o / claude-opus-4-5 / gemini-1.5-flash</td></tr>
+            <tr><td><code>CODEGUARDIAN_MAX_TOKENS</code></td><td><code>8192</code></td></tr>
+            <tr><td><code>CODEGUARDIAN_REFACTOR_MAX_TOKENS</code></td><td><code>16000</code></td></tr>
+            <tr><td><code>CODEGUARDIAN_PARALLEL</code></td><td><code>false</code></td></tr>
+            <tr><td><code>CODEGUARDIAN_PRESET</code></td><td><code>balanced</code></td></tr>
+            <tr><td><code>CODEGUARDIAN_CACHE_AI</code> / <code>CODEGUARDIAN_CACHE_TTL</code></td><td><code>true</code> / <code>0</code></td></tr>
+            <tr><td><code>CODEGUARDIAN_CACHE_STATIC</code></td><td><code>false</code></td></tr>
+            <tr><td><code>CODEGUARDIAN_WEBHOOK_URL</code></td><td>—</td></tr>
+            <tr><td><code>CODEGUARDIAN_SAFE_MODE</code> / <code>CODEGUARDIAN_AUTO_ROLLBACK</code></td><td><code>true</code> / <code>true</code></td></tr>
+            <tr><td><code>CODEGUARDIAN_DASHBOARD</code> / <code>_DASHBOARD_PATH</code> / <code>_DASHBOARD_LOCAL_ONLY</code></td><td><code>true</code> / <code>codeguardian</code> / <code>true</code></td></tr>
+            <tr><td><code>CODEGUARDIAN_PHP_BINARY</code></td><td>auto</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Glossary</h2>
+    <table>
+        <thead><tr><th>Term</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td>Static mode</td><td>Offline, rule-based analysis. Default. No API key.</td></tr>
+            <tr><td>Hybrid mode</td><td>Static analysis first, then AI enrichment of findings.</td></tr>
+            <tr><td>Finding</td><td>A single detected issue with full triage metadata.</td></tr>
+            <tr><td>Risk score</td><td>0–100 urgency rating (severity × confidence), with reasoning.</td></tr>
+            <tr><td>Quality dimension</td><td>One of six 0–100 scored aspects of code health.</td></tr>
+            <tr><td>Baseline</td><td>A snapshot of existing findings so CI fails only on new ones.</td></tr>
+            <tr><td>Quality gate</td><td>A configured budget that fails the build when breached.</td></tr>
+            <tr><td>Safe mode</td><td>Test-verified refactoring with automatic rollback.</td></tr>
+            <tr><td>SARIF</td><td>Static Analysis Results Interchange Format — code-scanning standard.</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Key file locations</h2>
+    <table>
+        <thead><tr><th>Path</th><th>Contents</th></tr></thead>
+        <tbody>
+            <tr><td><code>config/codeguardian.php</code></td><td>All configuration.</td></tr>
+            <tr><td><code>storage/codeguardian/reports/</code></td><td>Generated reports (JSON/HTML/MD/SARIF/JUnit).</td></tr>
+            <tr><td><code>storage/codeguardian/history.jsonl</code></td><td>Trend history.</td></tr>
+            <tr><td><code>storage/codeguardian/runs/</code></td><td>Dashboard run history + live logs.</td></tr>
+            <tr><td><code>storage/codeguardian/cache/</code></td><td>AI + static result caches.</td></tr>
+            <tr><td><code>tests/CodeGuardian/</code></td><td>Generated test stubs.</td></tr>
+        </tbody>
+    </table>
+
+    <div class="callout ok" style="margin-top:24px;"><strong>License:</strong> MIT.
+    &nbsp; <strong>Package:</strong> <code>codeguardian/laravel</code>.
+    &nbsp; CodeGuardian AI — Analyze. Improve. Validate. Report.</div>
+</section>
+
+</body>
+</html>
