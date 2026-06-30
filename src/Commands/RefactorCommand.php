@@ -223,7 +223,16 @@ class RefactorCommand extends Command
             $this->info("  Module  : {$context['module_root']}  (only files within this module are in scope)");
         }
 
-        $this->info("  Files   : {$context['summary']['total_files']}");
+        // For --file / --files only the named target(s) are rewritten; the rest
+        // is read-only context. Make that explicit so the file count is not
+        // mistaken for "files that will change".
+        $scopeTargets = $this->scopeTargetFiles($context);
+        if ($scopeTargets !== null) {
+            $contextCount = max(0, (int) $context['summary']['total_files'] - count($scopeTargets));
+            $this->info("  Files   : " . count($scopeTargets) . " to refactor  (+{$contextCount} read-only context)");
+        } else {
+            $this->info("  Files   : {$context['summary']['total_files']}");
+        }
 
         // Show which files are in scope + WHY each was included
         $reasons = $context['file_reasons'] ?? [];
@@ -513,6 +522,14 @@ class RefactorCommand extends Command
 
         // Only generate tests for files that HAVE findings — not every scanned file
         $filesToTest   = array_keys($this->groupFindingsByFile($analysisResults['agent_results']));
+
+        // For --file / --files, only the named target file(s) are refactored, so
+        // only generate tests for those — not the entire traced dependency chain.
+        $targets = $this->scopeTargetFiles($context);
+        if ($targets !== null) {
+            $filesToTest = array_values(array_intersect($filesToTest, $targets));
+        }
+
         $relevantFiles = array_filter(
             $context['files'] ?? [],
             fn($path) => in_array($path, $filesToTest, true),
@@ -579,9 +596,63 @@ class RefactorCommand extends Command
         return $runner->runAll($this->projectType);
     }
 
+    /**
+     * The set of files that should actually be REWRITTEN for the current scope.
+     *
+     * For `--file` / `--files`, the user named the file(s) they want changed;
+     * the traced dependency chain is read-only CONTEXT for the AI, not a set of
+     * extra files to refactor. (Refactoring the whole transitive chain of a fat
+     * console command pulled in dozens of unrelated repositories/models.)
+     *
+     * Returns null for api / module / project scope, where refactoring the whole
+     * resolved scope (controller → service → repository) is the desired
+     * behaviour.
+     *
+     * @param  array<string,mixed> $context
+     * @return array<int,string>|null
+     */
+    private function scopeTargetFiles(array $context): ?array
+    {
+        if (! in_array($context['scope'] ?? null, ['file', 'files'], true)) {
+            return null;
+        }
+
+        // Preferred: the explicit, normalised target list recorded by the scanner.
+        if (! empty($context['refactor_targets']) && is_array($context['refactor_targets'])) {
+            $targets = array_values(array_filter(array_map(
+                fn($p) => ltrim((string) $p, '/'),
+                $context['refactor_targets']
+            ), fn($p) => $p !== ''));
+
+            if ($targets !== []) {
+                return array_values(array_unique($targets));
+            }
+        }
+
+        // Fallback (older context shape): derive from file_reasons.
+        $targets = [];
+        foreach (($context['file_reasons'] ?? []) as $path => $reason) {
+            if (str_starts_with((string) $reason, 'target file')) {
+                $targets[] = $path;
+            }
+        }
+
+        return $targets !== [] ? $targets : null;
+    }
+
     private function runRefactoring(array $analysisResults, array $context): array
     {
         $findingsByFile = $this->groupFindingsByFile($analysisResults['agent_results']);
+
+        // For --file / --files, refactor ONLY the named target file(s). The
+        // traced dependency chain stays as read-only AI context (it is still in
+        // $context['files']) but is never rewritten — this prevents a single
+        // file's transitive dependencies from dragging dozens of unrelated
+        // files into the refactor.
+        $scopeTargets = $this->scopeTargetFiles($context);
+        if ($scopeTargets !== null) {
+            $findingsByFile = array_intersect_key($findingsByFile, array_flip($scopeTargets));
+        }
 
         // When --api= or --file= is used and AI is enabled, we MUST NOT bail early even if
         // static analysis found nothing. The deep-chain pass will run AI on the traced
@@ -746,7 +817,13 @@ class RefactorCommand extends Command
                 // sees the full call chain (controller → service → repository) and
                 // can make informed decisions about what goes where.
                 $relatedContextFiles = $context['files'] ?? [];
-                $aiChanges = $this->applyAiRefactoring($filePath, $fullPath, $issues, $relatedContextFiles);
+                $aiChanges = $this->applyAiRefactoring(
+                    $filePath,
+                    $fullPath,
+                    $issues,
+                    $relatedContextFiles,
+                    $context['module_root'] ?? null
+                );
             } elseif ($this->aiMode !== 'static') {
                 $this->line('  ⚡ AI provider not configured — static-only mode.');
             }
@@ -868,15 +945,30 @@ class RefactorCommand extends Command
             $allContextFiles  = $context['files'];
             $alreadyProcessed = array_keys($findingsByFile);
 
+            // For --file / --files, the deep-chain pass must only cover the named
+            // target file(s) (so a target with no static findings still gets an
+            // AI pass) — NOT the whole traced dependency chain.
+            $scopeTargets = $this->scopeTargetFiles($context);
+            if ($scopeTargets !== null) {
+                $allContextFiles = array_intersect_key($allContextFiles, array_flip($scopeTargets));
+            }
+
             $unprocessed = array_filter(
                 $allContextFiles,
                 fn($relPath) => ! in_array($relPath, $alreadyProcessed, true),
                 ARRAY_FILTER_USE_KEY
             );
 
+            // For --file / --files the "deep-chain" is really just the named
+            // target(s); for --api it is the service/repository layer. Label
+            // accordingly so the output is never misleading.
+            $isFileScope = $scopeTargets !== null;
+
             if (! empty($unprocessed)) {
                 $this->newLine();
-                $this->info('  🔍 API deep-chain: running AI review on service/repository layer...');
+                $this->info($isFileScope
+                    ? '  🔍 Running AI expert review on the target file...'
+                    : '  🔍 API deep-chain: running AI review on service/repository layer...');
 
                 foreach ($unprocessed as $relPath => $_) {
                     $candidatePath = $projectRealPath . DIRECTORY_SEPARATOR . ltrim($relPath, '/\\');
@@ -895,7 +987,7 @@ class RefactorCommand extends Command
                     }
 
                     $this->newLine();
-                    $this->info("  [service/repo] {$relPath}");
+                    $this->info('  [' . ($isFileScope ? 'target' : 'service/repo') . "] {$relPath}");
                     $this->line('  No static findings — running AI-only expert review...');
 
                     if ($this->backupEnabled) {
@@ -905,7 +997,13 @@ class RefactorCommand extends Command
                     }
 
                     // Pass zero static issues — AI will do its own independent review
-                    $aiChanges = $this->applyAiRefactoring($relPath, $fullPath, [], $allContextFiles);
+                    $aiChanges = $this->applyAiRefactoring(
+                        $relPath,
+                        $fullPath,
+                        [],
+                        $allContextFiles,
+                        $context['module_root'] ?? null
+                    );
 
                     if (! empty($aiChanges)) {
                         $refactorResults[$relPath] = [
@@ -1101,7 +1199,8 @@ class RefactorCommand extends Command
         string $filePath,
         string $fullPath,
         array  $issues,
-        array  $relatedContextFiles = []
+        array  $relatedContextFiles = [],
+        ?string $moduleRoot = null
     ): array {
         $provider = config('codeguardian.provider', 'claude');
         $this->newLine();
@@ -1130,7 +1229,6 @@ class RefactorCommand extends Command
         try {
             $agent     = new RefactorAgent();
             $apiFilter = $this->option('api') ?: null;
-            $moduleRoot = $context['module_root'] ?? null;
             $result     = $agent->refactorFile(
                 $filePath,
                 $currentContent,

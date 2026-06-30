@@ -375,6 +375,44 @@ class DependencyTracerTest extends TestCase
     }
 
     /** @test */
+    public function test_vendor_path_dependencies_are_excluded_even_when_namespace_is_unknown(): void
+    {
+        // Regression: a first-party class that type-hints a THIRD-PARTY SDK whose
+        // namespace is NOT in the vendor allowlist (e.g. AliyunMNS\Client) used to
+        // drag the entire package into scope, because the vendor/ files live under
+        // the project root. The path-based guard must exclude anything under
+        // vendor/ regardless of its namespace.
+        $ns       = 'CgTracerTest' . uniqid();
+        $vendorNs = 'AcmeSdk' . uniqid();
+
+        mkdir($this->tmpDir . '/vendor/acme/sdk', 0755, true);
+        $sdkFile  = $this->tmpDir . '/vendor/acme/sdk/Client.php';
+        $ctrlFile = $this->tmpDir . '/Manager.php';
+
+        file_put_contents($sdkFile, "<?php\nnamespace {$vendorNs};\nclass Client {}");
+        file_put_contents($ctrlFile, <<<PHP
+            <?php
+            namespace {$ns};
+            class Manager {
+                public function __construct(private \\{$vendorNs}\\Client \$client) {}
+            }
+            PHP);
+
+        require_once $sdkFile;
+        require_once $ctrlFile;
+
+        $tracer = new DependencyTracer($this->tmpDir);
+        $files  = $tracer->trace([$ns . '\\Manager'], 3);
+
+        $names = array_map('basename', array_keys($files));
+        $this->assertContains('Manager.php', $names, 'The first-party file must be in scope');
+        $this->assertNotContains('Client.php', $names,
+            'A vendor/ file must never enter the trace, even with an unknown namespace'
+        );
+        $this->assertCount(1, $files, 'Only the first-party file should be traced');
+    }
+
+    /** @test */
     public function test_trace_returns_empty_for_nonexistent_class(): void
     {
         $tracer = new DependencyTracer($this->tmpDir);

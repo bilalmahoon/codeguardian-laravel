@@ -347,6 +347,9 @@ return [
         'safe_mode'             => env('CODEGUARDIAN_SAFE_MODE', true),
         // Auto-rollback a file if refactoring introduces a new test failure.
         'auto_rollback_on_fail' => env('CODEGUARDIAN_AUTO_ROLLBACK', true),
+        // Total HTTP timeout (seconds) for each AI deep-refactor request. Raise
+        // it for very large files / slow networks if you see cURL error 28.
+        'ai_timeout'            => env('CODEGUARDIAN_AI_TIMEOUT', 180),
     ],
 
 ];

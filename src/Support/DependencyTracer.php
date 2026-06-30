@@ -202,6 +202,15 @@ class DependencyTracer
 
         $relPath = ltrim(str_replace($this->projectRoot, '', $file), '/');
 
+        // Never include third-party / non-source files. `vendor/` lives INSIDE
+        // the project root, so the str_starts_with(projectRoot) guard above does
+        // not catch it — this does. Without it, a class that type-hints a vendor
+        // SDK (e.g. an Aliyun/Guzzle client) would drag the entire package into
+        // the refactor scope.
+        if ($this->isNonSourcePath($relPath)) {
+            return;
+        }
+
         // Module-boundary enforcement: when $moduleRoot is set, only include
         // files that live within that module.
         if ($this->moduleRoot !== null && ! str_starts_with($relPath, $this->moduleRoot . '/')) {
@@ -357,6 +366,28 @@ class DependencyTracer
     {
         foreach (self::VENDOR_NAMESPACES as $prefix) {
             if (str_starts_with($class, $prefix)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Relative paths that must never enter the refactor scope: third-party code,
+     * build output, and other non–first-party directories. Matched on the
+     * project-relative path (vendor/ is under the project root).
+     */
+    private const NON_SOURCE_PREFIXES = [
+        'vendor/', 'node_modules/', 'storage/', 'bootstrap/cache/',
+        '.git/', '.dart_tool/', 'build/', '.pub-cache/',
+    ];
+
+    private function isNonSourcePath(string $relPath): bool
+    {
+        $norm = ltrim(str_replace('\\', '/', $relPath), '/');
+        foreach (self::NON_SOURCE_PREFIXES as $prefix) {
+            if (str_starts_with($norm, $prefix)) {
                 return true;
             }
         }

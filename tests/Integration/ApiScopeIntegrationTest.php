@@ -282,6 +282,46 @@ class ApiScopeIntegrationTest extends TestCase
     }
 
     /** @test */
+    public function test_build_context_for_file_records_explicit_refactor_target(): void
+    {
+        $scanner = new CodeScanner();
+        $context = $scanner->buildContextForFile(
+            realpath(__DIR__ . '/Fixtures'),
+            'Controllers/ApiAuthController.php'
+        );
+
+        // The dependency chain (AuthService, TokenService, UserRepository) is
+        // CONTEXT, but only the named file is an explicit refactor target.
+        $this->assertSame(
+            ['Controllers/ApiAuthController.php'],
+            $context['refactor_targets'] ?? null,
+            'Only the named file may be a refactor target; the chain is read-only context'
+        );
+    }
+
+    /** @test */
+    public function test_build_context_for_files_marks_every_named_file_as_target(): void
+    {
+        // Regression: AuthService depends on UserRepository. When BOTH are named
+        // as --files targets, UserRepository must still be a refactor target even
+        // though it is also reached as a dependency of AuthService.
+        $scanner = new CodeScanner();
+        $context = $scanner->buildContextForFiles(
+            realpath(__DIR__ . '/Fixtures'),
+            ['Services/AuthService.php', 'Repositories/UserRepository.php']
+        );
+
+        $targets = $context['refactor_targets'] ?? [];
+        sort($targets);
+
+        $this->assertSame(
+            ['Repositories/UserRepository.php', 'Services/AuthService.php'],
+            $targets,
+            'Every explicitly-named file must be a refactor target, even when one depends on another'
+        );
+    }
+
+    /** @test */
     public function test_build_context_for_file_throws_on_missing_file(): void
     {
         $scanner = new CodeScanner();

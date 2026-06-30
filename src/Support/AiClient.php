@@ -17,7 +17,15 @@ class AiClient
     public function __construct()
     {
         $this->provider = config('codeguardian.provider', 'openai');
-        $this->http     = new Client(['timeout' => 120]);
+        // Total request timeout is configurable: deep refactors of large files
+        // can legitimately take a while, and a too-low ceiling surfaces as a
+        // confusing "cURL error 28: Operation timed out". connect_timeout stays
+        // short so a dead network fails fast instead of hanging the whole run.
+        $timeout = (int) config('codeguardian.refactor.ai_timeout', 180);
+        $this->http     = new Client([
+            'timeout'         => $timeout > 0 ? $timeout : 180,
+            'connect_timeout' => 15,
+        ]);
         $this->cache    = AiResponseCache::fromConfig();
     }
 

@@ -349,6 +349,11 @@ class CodeScanner
             'resolution_method' => 'file+reflection',
             'module_root'       => $moduleRoot,
             'file_reasons'      => $fileReasons,
+            // Explicit list of files the user asked to refactor. Everything else
+            // in 'files' is read-only dependency context. Kept separate from
+            // 'file_reasons' so a named target is never mis-classified as a mere
+            // dependency (which can happen when targets depend on each other).
+            'refactor_targets'  => [$relFilePath],
         ];
     }
 
@@ -396,6 +401,7 @@ class CodeScanner
             'resolution_method' => 'files+reflection',
             'module_root'       => null,
             'file_reasons'      => $fileReasons,
+            'refactor_targets'  => $relPaths,
         ];
     }
 
