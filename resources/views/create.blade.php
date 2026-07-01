@@ -65,6 +65,11 @@
                 <option value="{{ $c['name'] }}">{{ $c['file'] }}</option>
             @endforeach
         </datalist>
+        <datalist id="dl-file">
+            @foreach($files as $f)
+                <option value="{{ $f }}"></option>
+            @endforeach
+        </datalist>
 
         <div class="row">
             <div class="field">
@@ -108,6 +113,7 @@
             api:     {{ count($apiRoutes) }},
             web:     {{ count($webRoutes) }},
             command: {{ count($commands) }},
+            file:    {{ count($files) }},
         };
         const CG_HINTS = {
             'analyze': 'Read-only review. Produces a graded report (architecture, security, performance, tech debt).',
@@ -123,7 +129,7 @@
             api:     { list: 'dl-api',     ph: 'Search API routes by URI…',          free: false },
             web:     { list: 'dl-web',     ph: 'Search web routes by URI…',          free: false },
             command: { list: 'dl-command', ph: 'Search artisan commands by name…',   free: false },
-            file:    { list: null,         ph: 'app/Services/AuthService.php',        free: true },
+            file:    { list: 'dl-file',    ph: 'Search files by path…',              free: true },
             path:    { list: null,         ph: 'app/Http/Controllers (directory)',   free: true },
         };
 
@@ -186,7 +192,7 @@
         // Build option sets from the (invisible) native datalists so the server
         // stays the single source of truth for routes/modules/commands.
         const CG_OPTION_SETS = {};
-        ['dl-module', 'dl-api', 'dl-web', 'dl-command'].forEach(function (id) {
+        ['dl-module', 'dl-api', 'dl-web', 'dl-command', 'dl-file'].forEach(function (id) {
             const dl = document.getElementById(id);
             CG_OPTION_SETS[id] = dl ? Array.prototype.map.call(dl.querySelectorAll('option'), function (o) {
                 return { value: o.value, meta: (o.textContent || '').trim() };

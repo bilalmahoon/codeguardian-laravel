@@ -163,6 +163,45 @@ class RunStoreTest extends TestCase
         $this->assertStringNotContainsString('--null', $arg, 'null values must be skipped');
     }
 
+    /** @test */
+    public function test_runner_script_is_valid_php_and_detaches(): void
+    {
+        $log = $this->runsDir . '/runner_test/output.log';
+        mkdir(dirname($log), 0775, true);
+        file_put_contents($log, "# start\n");
+
+        $method = new \ReflectionMethod($this->store, 'writeRunnerScript');
+        $base   = escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg('echo "HELLO-RUNNER";');
+        $runner = $method->invoke($this->store, $log, $base, sys_get_temp_dir());
+
+        $this->assertIsString($runner, 'writeRunnerScript must return the runner path');
+        $this->assertFileExists($runner);
+
+        // 1) The generated script must be syntactically valid PHP.
+        $lint = shell_exec(escapeshellarg(PHP_BINARY) . ' -l ' . escapeshellarg($runner) . ' 2>&1');
+        $this->assertStringContainsString('No syntax errors', (string) $lint);
+
+        // 2) It must carry the self-detach guard (survives php-fpm teardown).
+        $src = file_get_contents($runner);
+        $this->assertStringContainsString('posix_setsid', $src);
+        $this->assertStringContainsString('pcntl_fork', $src);
+
+        // 3) Running it must stream the command output + completion sentinel.
+        shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($runner) . ' >/dev/null 2>&1 &');
+        $deadline = microtime(true) + 5;
+        $body     = '';
+        while (microtime(true) < $deadline) {
+            $body = (string) file_get_contents($log);
+            if (str_contains($body, 'CG_EXIT:')) {
+                break;
+            }
+            usleep(100000);
+        }
+
+        $this->assertStringContainsString('HELLO-RUNNER', $body, 'Runner must stream command output to the log');
+        $this->assertStringContainsString('CG_EXIT:0', $body, 'Runner must append the completion sentinel');
+    }
+
     private function rmdir(string $dir): void
     {
         if (! is_dir($dir)) {

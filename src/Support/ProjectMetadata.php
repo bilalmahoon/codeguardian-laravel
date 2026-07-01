@@ -145,6 +145,55 @@ class ProjectMetadata
         return $out;
     }
 
+    /**
+     * First-party PHP source files, relative to the project root, for the
+     * "file" target picker. Only real source dirs are scanned (app/, Modules/,
+     * src/) — vendor/tests/storage/migrations are excluded. Capped so the form
+     * payload and client-side filter stay fast on huge codebases.
+     *
+     * @return array<int,string>
+     */
+    public function files(int $cap = 4000): array
+    {
+        $roots = [];
+        foreach (['app', 'Modules', 'src'] as $dir) {
+            $abs = $this->projectRoot . '/' . $dir;
+            if (is_dir($abs)) {
+                $roots[] = $abs;
+            }
+        }
+
+        $out = [];
+        foreach ($roots as $root) {
+            try {
+                $it = new \RecursiveIteratorIterator(
+                    new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS)
+                );
+            } catch (\Throwable) {
+                continue;
+            }
+
+            foreach ($it as $file) {
+                if (! $file->isFile() || strtolower($file->getExtension()) !== 'php') {
+                    continue;
+                }
+                $rel = ltrim(str_replace($this->projectRoot, '', $file->getPathname()), '/\\');
+                // Skip non-source noise that may live under these roots.
+                if (preg_match('#(^|/)(vendor|tests?|storage|node_modules)/#i', $rel)) {
+                    continue;
+                }
+                $out[] = $rel;
+                if (count($out) >= $cap) {
+                    break 2;
+                }
+            }
+        }
+
+        sort($out);
+
+        return $out;
+    }
+
     /** Resolve an artisan command name to the relative file that defines it. */
     public function commandFile(string $name): ?string
     {

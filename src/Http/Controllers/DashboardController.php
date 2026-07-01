@@ -137,6 +137,7 @@ class DashboardController
             'apiRoutes'   => $routes['api'],
             'webRoutes'   => $routes['web'],
             'commands'    => $meta->commands(),
+            'files'       => $meta->files(),
             'targetLabels'=> $this->targetLabels(),
         ]);
     }
