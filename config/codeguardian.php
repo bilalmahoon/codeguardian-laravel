@@ -319,17 +319,30 @@ return [
         // The package also applies its own authorization gate (see below).
         'middleware' => ['web'],
 
-        // Authorization. By default the dashboard is only reachable in the
-        // 'local' environment. To open it elsewhere, define a Gate named
-        // 'viewCodeGuardian' in your AuthServiceProvider, OR set
-        // 'restrict_to_local' => false (NOT recommended for production).
+        // Require login: when true, any AUTHENTICATED user of your app may open
+        // the dashboard, and guests are redirected to your login page. This is
+        // the easiest way to expose it on a shared/staging server — it rides on
+        // your app's existing auth. Takes precedence over restrict_to_local.
+        // For finer control (specific users/roles) define a 'viewCodeGuardian'
+        // Gate instead — the Gate always wins when present.
+        'require_login' => env('CODEGUARDIAN_DASHBOARD_REQUIRE_LOGIN', false),
+
+        // Authorization fallback (used only when require_login is false and no
+        // Gate is defined). By default the dashboard is only reachable in the
+        // 'local' environment. Set to false to open it everywhere (NOT
+        // recommended without require_login or a Gate).
         'restrict_to_local' => env('CODEGUARDIAN_DASHBOARD_LOCAL_ONLY', true),
 
         // Where run history + live logs are stored (relative to storage_path()).
         'runs_dir' => 'codeguardian/runs',
 
-        // Absolute path to the PHP binary used to launch background runs.
-        // Auto-detected (PHP_BINARY) when null.
+        // Absolute path to the PHP *CLI* binary used to launch background runs.
+        // Auto-detected when null. IMPORTANT: the web server runs under php-fpm,
+        // whose binary CANNOT run artisan (it hangs), so the package deliberately
+        // avoids PHP_BINARY under fpm and looks for a real `php` CLI. If your
+        // dashboard runs still get stuck with no output, set this explicitly,
+        // e.g. CODEGUARDIAN_PHP_BINARY=/opt/homebrew/bin/php  (find yours with
+        // `which php`).
         'php_binary' => env('CODEGUARDIAN_PHP_BINARY'),
     ],
 

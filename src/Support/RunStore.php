@@ -88,8 +88,13 @@ class RunStore
      */
     private function launch(string $artisan, string $argString, string $log): void
     {
-        $php     = $this->phpBinary ?: (PHP_BINARY ?: 'php');
+        $php         = $this->resolvePhpBinary();
         $artisanPath = base_path('artisan');
+
+        // Record which interpreter we launch with — this is the #1 cause of a
+        // "stuck, no output" dashboard run (php-fpm's binary hangs instead of
+        // running artisan). Visible in the live log for instant diagnosis.
+        @file_put_contents($log, "# runner: {$php}\n\n", FILE_APPEND);
 
         // Force non-interactive, decoration-free output so the log stays clean
         // and the command never blocks waiting for stdin.
@@ -125,7 +130,84 @@ class RunStore
 
         if (is_resource($handle)) {
             proc_close($handle);
+            return;
         }
+
+        // Launch failed outright — record it so the dashboard shows a failure
+        // instead of spinning on "running…" forever.
+        @file_put_contents(
+            $log,
+            "\nFailed to start the background process (proc_open returned false).\n"
+            . self::SENTINEL . "1\n",
+            FILE_APPEND
+        );
+    }
+
+    /**
+     * Resolve a real PHP **CLI** binary to launch background artisan runs with.
+     *
+     * PHP_BINARY is only reliable under the CLI SAPI. Under a web SAPI (php-fpm,
+     * apache2handler, …) it points at the SAPI binary — e.g. `php-fpm` — which,
+     * when invoked as `php-fpm artisan …`, tries to boot the FPM master and
+     * hangs forever with no output. That is the classic "dashboard stuck" bug.
+     *
+     * Resolution order:
+     *   1. Explicit config (codeguardian.dashboard.php_binary).
+     *   2. PHP_BINARY — but only when we are actually running under the CLI.
+     *   3. A `php` executable next to the current binary / in PHP_BINDIR.
+     *   4. Common install locations (Homebrew, /usr/local, /usr/bin).
+     *   5. `command -v php` via the shell.
+     *   6. Bare 'php' (let PATH resolve it).
+     */
+    private function resolvePhpBinary(): string
+    {
+        if ($this->phpBinary && $this->isUsableCli($this->phpBinary)) {
+            return $this->phpBinary;
+        }
+
+        if (PHP_SAPI === 'cli' && defined('PHP_BINARY') && $this->isUsableCli(PHP_BINARY)) {
+            return PHP_BINARY;
+        }
+
+        $candidates = [];
+        if (defined('PHP_BINDIR') && PHP_BINDIR) {
+            $candidates[] = rtrim(PHP_BINDIR, '/') . '/php';
+        }
+        if (defined('PHP_BINARY') && PHP_BINARY) {
+            $candidates[] = dirname(PHP_BINARY) . '/php';
+        }
+        $candidates[] = '/opt/homebrew/bin/php';
+        $candidates[] = '/usr/local/bin/php';
+        $candidates[] = '/usr/bin/php';
+
+        foreach ($candidates as $candidate) {
+            if ($this->isUsableCli($candidate)) {
+                return $candidate;
+            }
+        }
+
+        $which = @shell_exec('command -v php 2>/dev/null');
+        if (is_string($which) && ($which = trim($which)) !== '' && $this->isUsableCli($which)) {
+            return $which;
+        }
+
+        return 'php';
+    }
+
+    /**
+     * A usable CLI binary exists, is executable, and is not the fpm/cgi SAPI.
+     */
+    private function isUsableCli(string $path): bool
+    {
+        if ($path === '') {
+            return false;
+        }
+        $base = strtolower(basename($path));
+        if (str_contains($base, 'fpm') || str_contains($base, 'cgi')) {
+            return false;
+        }
+
+        return is_file($path) && is_executable($path);
     }
 
     // ─── Reading ──────────────────────────────────────────────────────────────
