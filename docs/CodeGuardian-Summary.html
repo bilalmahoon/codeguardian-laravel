@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CodeGuardian AI for Laravel — Executive Summary</title>
+<style>
+    :root {
+        --ink: #1a202c; --muted: #5b6675; --faint: #8a93a6;
+        --accent: #2b59ff; --accent-2: #6b3df5;
+        --line: #e2e6ee; --bg-soft: #f6f8fc;
+        --green: #1c8a4a; --amber: #b7791f;
+        --mono: "SFMono-Regular", Menlo, Consolas, monospace;
+        --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body { font-family: var(--sans); color: var(--ink); margin: 0; font-size: 9.6pt; line-height: 1.42; }
+    @page { size: A4; margin: 12mm 13mm; }
+    .page { page-break-after: always; }
+    .page:last-child { page-break-after: auto; }
+
+    /* Header band */
+    .hero {
+        color: #fff; border-radius: 12px; padding: 16px 20px; margin-bottom: 14px;
+        background: linear-gradient(135deg, #0b1437 0%, #1a2a6b 48%, #3b1d6e 100%);
+        position: relative; overflow: hidden;
+    }
+    .hero::after { content: ""; position: absolute; right: -80px; top: -80px; width: 300px; height: 300px;
+        background: radial-gradient(circle, rgba(107,61,245,.5), transparent 62%); }
+    .hero .diamond { font-size: 20px; }
+    .hero h1 { font-size: 24pt; margin: 2px 0 2px; font-weight: 800; line-height: 1.04; }
+    .hero h1 .accent { color: #93a8ff; }
+    .hero .sub { font-size: 10.5pt; color: #c9d1f0; font-weight: 500; }
+    .hero .authors { margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(255,255,255,.2); font-size: 9pt; color: #dfe4ff; }
+    .hero .authors .lbl { color: #93a8ff; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; font-size: 7.6pt; margin-right: 8px; }
+    .hero .authors b { color: #fff; font-weight: 600; }
+
+    .kicker { color: var(--accent); font-weight: 800; font-size: 8pt; letter-spacing: 1.4px; text-transform: uppercase; margin: 14px 0 3px; }
+    h2 { font-size: 12.5pt; margin: 0 0 6px; font-weight: 800; border-bottom: 2px solid var(--accent); padding-bottom: 3px; }
+    h3 { font-size: 9.6pt; margin: 0 0 3px; font-weight: 700; color: #2a3242; }
+    p { margin: 5px 0; }
+    .lead { font-size: 10.4pt; color: var(--muted); margin: 0 0 6px; }
+    ul { margin: 4px 0; padding-left: 16px; }
+    li { margin: 2px 0; }
+    code { font-family: var(--mono); font-size: 8.2pt; background: var(--bg-soft); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; color: #2a3550; }
+    strong { font-weight: 700; }
+
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+    .card { border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; background: #fff; }
+    .card.soft { background: var(--bg-soft); }
+    .card .n { font-size: 17pt; font-weight: 800; color: var(--accent); line-height: 1; }
+    .card .lbl { font-size: 8pt; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+
+    .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 6px 0; }
+    .flow .step { border: 1px solid var(--line); border-radius: 9px; padding: 8px; text-align: center; background: #fff; }
+    .flow .step .b { display: inline-block; width: 20px; height: 20px; line-height: 20px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 800; font-size: 8.5pt; }
+    .flow .step h3 { margin: 5px 0 2px; font-size: 9pt; }
+    .flow .step p { margin: 0; font-size: 7.8pt; color: var(--muted); line-height: 1.3; }
+
+    table { width: 100%; border-collapse: collapse; margin: 4px 0; font-size: 8.6pt; }
+    th, td { text-align: left; padding: 4px 7px; border: 1px solid var(--line); vertical-align: top; }
+    th { background: var(--bg-soft); font-weight: 700; color: #2a3242; }
+
+    .callout { border-left: 4px solid var(--green); background: #eefaf1; padding: 7px 11px; border-radius: 0 8px 8px 0; margin: 8px 0; font-size: 9pt; }
+    .pills { margin: 6px 0; }
+    .pill { display: inline-block; border: 1px solid var(--line); background: var(--bg-soft); border-radius: 999px; padding: 2px 9px; margin: 0 4px 5px 0; font-size: 8pt; color: #35405a; }
+
+    .footer { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; font-size: 8pt; color: var(--faint); display: flex; justify-content: space-between; }
+    .footer b { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<!-- ===================== PAGE 1 ===================== -->
+<div class="page">
+    <div class="hero">
+        <div class="diamond">◆</div>
+        <h1>CodeGuardian&nbsp;AI <span class="accent">for Laravel</span></h1>
+        <div class="sub">Executive Summary · Analyze · Improve · Validate · Report</div>
+        <div class="authors">
+            <span class="lbl">Prepared by</span>
+            <b>Muhammad Bilal</b> &nbsp;·&nbsp; <b>Muhammad Suleman</b> &nbsp;·&nbsp; <b>Abdullah bin Yousaf</b>
+        </div>
+    </div>
+
+    <p class="lead">CodeGuardian AI is a production-grade static analysis, security audit, automated
+    refactoring, and reporting platform for Laravel (PHP) and Flutter (Dart). It installs as a Composer
+    package and runs from artisan commands or a built-in web dashboard — <strong>offline, free, and
+    deterministic by default</strong>, with an optional AI engine for intent-aware review.</p>
+
+    <div class="callout"><strong>No API key. No internet. No cost. 100% embedded.</strong>
+    The default static engine performs all core analysis for free; AI mode (OpenAI · Claude · Gemini)
+    is an optional upgrade for richer, natural-language explanations and deep refactors.</div>
+
+    <div class="row3" style="margin:8px 0;">
+        <div class="card soft"><div class="n">20</div><div class="lbl">Artisan commands</div></div>
+        <div class="card soft"><div class="n">6</div><div class="lbl">Health dimensions</div></div>
+        <div class="card soft"><div class="n">6</div><div class="lbl">Report formats</div></div>
+    </div>
+
+    <div class="kicker">The Problem &amp; The Approach</div>
+    <h2>Why it exists</h2>
+    <p>Most teams find architectural debt, security holes, and performance traps too late — in
+    production or in painful reviews. CodeGuardian shifts that discovery <em>left</em>: it scans the
+    codebase deterministically, scores health across six dimensions, explains every finding with a
+    concrete fix, and can <strong>safely apply many fixes automatically</strong> behind a test-verified
+    safety net that auto-rolls back any regression.</p>
+
+    <div class="kicker">End-to-End Pipeline</div>
+    <h2>The core workflow</h2>
+    <div class="flow">
+        <div class="step"><span class="b">1</span><h3>Analyze</h3><p>Scan code; produce findings, scores &amp; a risk rating.</p></div>
+        <div class="step"><span class="b">2</span><h3>Test-first</h3><p>Generate PHPUnit stubs <em>before</em> any change.</p></div>
+        <div class="step"><span class="b">3</span><h3>Refactor</h3><p>Deterministic + AI fixes, one file at a time.</p></div>
+        <div class="step"><span class="b">4</span><h3>Validate</h3><p>Re-run tests; auto-rollback on regression.</p></div>
+        <div class="step"><span class="b">5</span><h3>Report</h3><p>Console, HTML, JSON, MD, SARIF, JUnit.</p></div>
+    </div>
+
+    <div class="kicker">Graded Insight</div>
+    <h2>Six-dimension scorecard</h2>
+    <p>Every analysis grades the codebase 0–100 (with a letter grade and reasoning) across
+    <strong>Architecture</strong>, <strong>Security</strong>, <strong>Performance</strong>,
+    <strong>Maintainability</strong>, <strong>Testability</strong>, and <strong>Reliability</strong> —
+    plus an explainable <strong>risk score</strong> weighted by severity × confidence. Security
+    findings are mapped to OWASP Top 10 (2021), a CWE id, an indicative CVSS band, confidence, impact,
+    effort, and breaking-change risk.</p>
+
+    <div class="footer">
+        <span><b>CodeGuardian AI for Laravel</b> — Executive Summary</span>
+        <span>M. Bilal · M. Suleman · Abdullah bin Yousaf</span>
+        <span>Page 1 of 2</span>
+    </div>
+</div>
+
+<!-- ===================== PAGE 2 ===================== -->
+<div class="page">
+    <div class="kicker">What You Get</div>
+    <h2>Key capabilities</h2>
+    <div class="row2">
+        <div>
+            <table>
+                <tr><th style="width:38%">Capability</th><th>What it does</th></tr>
+                <tr><td><strong>Static engine</strong></td><td>Architecture, security, performance, tech-debt &amp; database analyzers — offline &amp; deterministic.</td></tr>
+                <tr><td><strong>Foolproof refactor</strong></td><td>Test → refactor → verify loop with auto-rollback and syntax-validated writes.</td></tr>
+                <tr><td><strong>Auto-fixes</strong></td><td>No-AI mechanical fixes: remove <code>dd()</code>, <code>all()</code>→<code>validated()</code>, add return types.</td></tr>
+                <tr><td><strong>AI engine</strong></td><td>Optional OpenAI/Claude/Gemini review + diff-only mode for cheap PR review.</td></tr>
+            </table>
+        </div>
+        <div>
+            <table>
+                <tr><th style="width:38%">Capability</th><th>What it does</th></tr>
+                <tr><td><strong>Premium CLI</strong></td><td>Live multi-stage pipeline: spinners, ETA, per-file ticks, stats card; CI-safe plain mode.</td></tr>
+                <tr><td><strong>Web dashboard</strong></td><td>Run from the browser, live progress, history, insights trends &amp; findings explorer.</td></tr>
+                <tr><td><strong>Performance</strong></td><td>Parallel analyzers, incremental git-scoped scans, AI + static result caching.</td></tr>
+                <tr><td><strong>Extensible</strong></td><td>Rule enable/severity, presets, custom regex rules, PHPStan/Psalm/Clover ingestion.</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <div class="kicker">Fits Your Toolchain</div>
+    <h2>CI/CD &amp; reporting</h2>
+    <div class="row2">
+        <div class="card">
+            <h3>Continuous integration</h3>
+            <ul>
+                <li><strong>SARIF 2.1.0</strong> upload for GitHub/GitLab/Azure code scanning.</li>
+                <li><strong>Baseline / diff</strong> — fail only on newly introduced findings.</li>
+                <li><strong>Quality gates</strong>, inline PR annotations, PR/MR comments.</li>
+                <li><code>codeguardian:doctor</code> preflight + JUnit test panels.</li>
+            </ul>
+        </div>
+        <div class="card">
+            <h3>Command groups (20 total)</h3>
+            <ul>
+                <li><strong>Analyze:</strong> analyze, security, performance, generate-tests.</li>
+                <li><strong>Improve:</strong> refactor, fix.</li>
+                <li><strong>Insight:</strong> graph, trend, test-impact, rules, explain.</li>
+                <li><strong>Ops:</strong> init, doctor, audit, watch, review, notify, config-check.</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="kicker">Built For</div>
+    <h2>Who it is for</h2>
+    <div class="row2">
+        <div class="card soft"><h3>Engineering teams &amp; leads</h3><p style="margin:2px 0;font-size:8.6pt;color:var(--muted)">CI health gating, PR-review automation, six-dimension scorecards, dependency graphs, and trend tracking.</p></div>
+        <div class="card soft"><h3>Security engineers &amp; developers</h3><p style="margin:2px 0;font-size:8.6pt;color:var(--muted)">OWASP/CWE-mapped findings, CVE audits, SARIF output, a fast inner-loop watcher, and a friendly local dashboard.</p></div>
+    </div>
+
+    <div class="kicker">At a Glance</div>
+    <h2>Stack &amp; footprint</h2>
+    <div class="pills">
+        <span class="pill">PHP ^8.1</span>
+        <span class="pill">Laravel 9 / 10 / 11</span>
+        <span class="pill">Flutter / Dart</span>
+        <span class="pill">Zero-cost static engine</span>
+        <span class="pill">OpenAI · Claude · Gemini</span>
+        <span class="pill">CI · SARIF · JUnit</span>
+        <span class="pill">Web dashboard</span>
+        <span class="pill">MIT licensed</span>
+    </div>
+    <p style="font-size:8.8pt;color:var(--muted);margin:4px 0;">Installs via Composer with Laravel package
+    auto-discovery. Only <code>tokenizer</code> is required; <code>pcntl</code> is optional for parallel
+    analysis. Get started in one line: <code>php artisan codeguardian:analyze</code>.</p>
+
+    <div class="footer">
+        <span><b>CodeGuardian AI for Laravel</b> — Executive Summary</span>
+        <span>M. Bilal · M. Suleman · Abdullah bin Yousaf</span>
+        <span>Page 2 of 2</span>
+    </div>
+</div>
+
+</body>
+</html>
