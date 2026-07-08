@@ -34,6 +34,7 @@ use CodeGuardian\Laravel\Commands\TrendCommand;
 use CodeGuardian\Laravel\Commands\SecurityScanCommand;
 use CodeGuardian\Laravel\Commands\WatchCommand;
 use CodeGuardian\Laravel\Http\Middleware\Authorize;
+use CodeGuardian\Laravel\Http\Middleware\VerifySlackSignature;
 use CodeGuardian\Laravel\Support\CachedPhpParser;
 use CodeGuardian\Laravel\Support\FileTypeDetector;
 use CodeGuardian\Laravel\Support\RunStore;
@@ -85,6 +86,7 @@ class CodeGuardianServiceProvider extends ServiceProvider
     {
         $this->loadViewsFrom(__DIR__ . '/../resources/views', 'codeguardian');
         $this->registerDashboardRoutes();
+        $this->registerSlackRoutes();
 
         if ($this->app->runningInConsole()) {
             // Publish config
@@ -148,6 +150,29 @@ class CodeGuardianServiceProvider extends ServiceProvider
             'middleware' => $middleware,
         ], function () {
             $this->loadRoutesFrom(__DIR__ . '/../routes/web.php');
+        });
+    }
+
+    /**
+     * Register the Slack App endpoints (slash command + interactivity). These
+     * are NOT behind the dashboard's session auth/CSRF — every request is
+     * verified by its Slack signature instead. Mounted under the same prefix
+     * as the dashboard so one URL base covers everything.
+     */
+    private function registerSlackRoutes(): void
+    {
+        if (! config('codeguardian.slack.enabled', false)) {
+            return;
+        }
+
+        $router = $this->app['router'];
+        $router->aliasMiddleware('codeguardian.slack', VerifySlackSignature::class);
+
+        Route::group([
+            'prefix'     => config('codeguardian.dashboard.path', 'codeguardian'),
+            'middleware' => ['codeguardian.slack'],
+        ], function () {
+            $this->loadRoutesFrom(__DIR__ . '/../routes/slack.php');
         });
     }
 }

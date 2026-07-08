@@ -9,6 +9,7 @@ use CodeGuardian\Laravel\Analyzers\StaticOrchestrator;
 use CodeGuardian\Laravel\Support\AiClient;
 use CodeGuardian\Laravel\Support\SafeFileWriter;
 use CodeGuardian\Laravel\Support\SentryClient;
+use CodeGuardian\Laravel\Support\SentryStateStore;
 use CodeGuardian\Laravel\Support\TestRunner;
 use CodeGuardian\Laravel\Support\WebhookNotifier;
 use Illuminate\Console\Command;
@@ -27,12 +28,16 @@ class SentryCommand extends Command
 {
     protected $signature = 'codeguardian:sentry
                             {--limit=10       : Max unresolved issues to pull}
+                            {--issue=         : Handle a single Sentry issue by ID (e.g. from a Slack button)}
                             {--fix            : Generate an AI fix for each issue (requires an AI key)}
                             {--apply          : Write the generated fix to disk (safe: syntax-checked + backup + rollback)}
                             {--with-tests     : After --apply, run existing project tests; roll back on failure}
                             {--resolve        : Mark the issue resolved in Sentry after a verified fix}
                             {--slack=         : Send a Slack summary (URL, or empty to use config webhook)}
                             {--project=       : Project label shown in the Slack message}
+                            {--watch          : Continuously poll Sentry and auto-handle NEW issues only}
+                            {--interval=60    : Seconds between polls in --watch mode}
+                            {--max-iterations=0 : Stop --watch after N polls (0 = run forever)}
                             {--dry-run        : Never write, resolve, or send — print what would happen}';
 
     protected $description = 'Triage Sentry production issues and (optionally) auto-fix them safely';
@@ -58,32 +63,117 @@ class SentryCommand extends Command
             return self::FAILURE;
         }
 
-        $limit  = max(1, (int) $this->option('limit'));
-        $this->info("Fetching up to {$limit} unresolved Sentry issue(s)…");
-        $issues = $sentry->unresolvedIssues($limit);
+        $root = base_path();
 
-        if ($issues === []) {
+        // Single-issue mode (e.g. triggered by a Slack "Fix" button).
+        if (($issueId = (string) $this->option('issue')) !== '') {
+            $issue = $sentry->issue($issueId);
+            if ($issue === null) {
+                $this->error("Issue {$issueId} not found in Sentry.");
+                return self::FAILURE;
+            }
+            $item = $this->processIssue($sentry, $issue, $root, $wantFix, $apply, $dryRun);
+            $this->renderTable([$item]);
+            $this->maybeNotify([$item], $dryRun);
+            return $this->needsAttention([$item]) ? self::FAILURE : self::SUCCESS;
+        }
+
+        // Continuous observe + auto-fix loop.
+        if ((bool) $this->option('watch')) {
+            return $this->watch($sentry, $root, $wantFix, $apply, $dryRun);
+        }
+
+        // One-shot batch.
+        $items = $this->runBatch($sentry, $root, $wantFix, $apply, $dryRun);
+        if ($items === null) {
             $this->info('✓ No unresolved issues found. Nothing to do.');
             return self::SUCCESS;
         }
-
-        $root  = base_path();
-        $items = [];
-
-        foreach ($issues as $issue) {
-            $items[] = $this->processIssue($sentry, $issue, $root, $wantFix, $apply, $dryRun);
-        }
-
         $this->renderTable($items);
         $this->maybeNotify($items, $dryRun);
 
-        // Non-zero exit when something needs a human — useful for CI/cron alerts.
-        $needsAttention = count(array_filter(
-            $items,
-            fn($i) => in_array($i['status'], ['unresolvable', 'no-file', 'error'], true)
-        ));
+        return $this->needsAttention($items) ? self::FAILURE : self::SUCCESS;
+    }
 
-        return $needsAttention > 0 ? self::FAILURE : self::SUCCESS;
+    /**
+     * Poll Sentry, handle each unresolved issue, and return the result items
+     * (or null when there was nothing to do). Honours the state store so an
+     * issue already handled by a previous poll is skipped.
+     *
+     * @return array<int,array<string,mixed>>|null
+     */
+    private function runBatch(SentryClient $sentry, string $root, bool $wantFix, bool $apply, bool $dryRun, ?SentryStateStore $state = null): ?array
+    {
+        $limit  = max(1, (int) $this->option('limit'));
+        $issues = $sentry->unresolvedIssues($limit);
+
+        if ($state !== null) {
+            $issues = array_values(array_filter(
+                $issues,
+                fn($i) => is_array($i) && ! $state->isProcessed((string) ($i['id'] ?? ''))
+            ));
+        }
+
+        if ($issues === []) {
+            return null;
+        }
+
+        $items = [];
+        foreach ($issues as $issue) {
+            $item = $this->processIssue($sentry, $issue, $root, $wantFix, $apply, $dryRun);
+            $items[] = $item;
+
+            // Record in the state store unless it was a transient error (so a
+            // failed event fetch is retried on the next poll).
+            if ($state !== null && $item['status'] !== 'error') {
+                $state->markProcessed((string) ($issue['id'] ?? ''), (string) $item['status']);
+            }
+        }
+
+        return $items;
+    }
+
+    /**
+     * Continuous watch loop: poll Sentry every --interval seconds and auto-handle
+     * only issues not seen before. Runs forever unless --max-iterations is set.
+     */
+    private function watch(SentryClient $sentry, string $root, bool $wantFix, bool $apply, bool $dryRun): int
+    {
+        $interval = max(5, (int) $this->option('interval'));
+        $maxIter  = max(0, (int) $this->option('max-iterations'));
+        $state    = SentryStateStore::fromConfig();
+
+        $this->info("👁  Watching Sentry every {$interval}s — auto-handling new issues. Press Ctrl+C to stop.");
+
+        $iteration = 0;
+        while (true) {
+            $iteration++;
+            $items = $this->runBatch($sentry, $root, $wantFix, $apply, $dryRun, $state);
+
+            if ($items === null) {
+                $this->line('  · ' . date('H:i:s') . ' — no new issues');
+            } else {
+                $this->renderTable($items);
+                $this->maybeNotify($items, $dryRun);
+            }
+
+            if ($maxIter > 0 && $iteration >= $maxIter) {
+                return self::SUCCESS;
+            }
+
+            sleep($interval);
+        }
+    }
+
+    /** @param array<int,array<string,mixed>> $items */
+    private function needsAttention(array $items): bool
+    {
+        foreach ($items as $i) {
+            if (in_array($i['status'], ['unresolvable', 'no-file', 'error'], true)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -100,6 +190,7 @@ class SentryCommand extends Command
     ): array {
         $s    = SentryClient::summariseIssue($issue);
         $item = [
+            'id'        => $s['id'],
             'title'     => $s['title'],
             'permalink' => $s['permalink'],
             'events'    => $s['count'],
@@ -339,8 +430,12 @@ class SentryCommand extends Command
     private function maybeNotify(array $items, bool $dryRun): void
     {
         $slackOpt = $this->option('slack');
-        if ($slackOpt === null) {
-            return; // --slack not passed
+        // --slack can be given with a URL (--slack=…) or as a bare flag
+        // (--slack, value null) meaning "use the configured webhook". Detect the
+        // bare-flag case via the raw input so it isn't mistaken for "not passed".
+        $provided = $slackOpt !== null || $this->input->hasParameterOption('--slack');
+        if (! $provided) {
+            return;
         }
         $url = (string) ($slackOpt ?: config('codeguardian.notifications.webhook', ''));
         if ($url === '') {
@@ -348,8 +443,10 @@ class SentryCommand extends Command
             return;
         }
 
-        $project = (string) ($this->option('project') ?: config('app.name', ''));
-        $payload = WebhookNotifier::sentrySummary($items, $project);
+        $project     = (string) ($this->option('project') ?: config('app.name', ''));
+        $interactive = (bool) config('codeguardian.slack.enabled', false)
+                    && (bool) config('codeguardian.slack.interactive', true);
+        $payload     = WebhookNotifier::sentrySummary($items, $project, $interactive);
 
         if ($dryRun) {
             $this->line((string) json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));

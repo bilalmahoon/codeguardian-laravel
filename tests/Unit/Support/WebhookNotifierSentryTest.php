@@ -60,4 +60,42 @@ class WebhookNotifierSentryTest extends TestCase
         $this->assertStringContainsString('0 issues triaged', $payload['text']);
         $this->assertStringContainsString('🔍', $payload['text']);
     }
+
+    public function test_interactive_adds_fix_button_for_unfixed_issue(): void
+    {
+        $items = [[
+            'id' => 'ISSUE-99', 'title' => 'TypeError: bad arg',
+            'file' => 'app/X.php', 'line' => 1, 'permalink' => '', 'events' => 2,
+            'status' => 'analyzed', 'root_cause' => 'x', 'tests' => '',
+        ]];
+
+        $payload = WebhookNotifier::sentrySummary($items, 'shop', true);
+        $json    = json_encode($payload);
+
+        $this->assertStringContainsString('cg_sentry_fix', $json);
+        $this->assertStringContainsString('ISSUE-99', $json);
+        $this->assertStringContainsString('Fix it', $json);
+    }
+
+    public function test_no_button_when_not_interactive(): void
+    {
+        $items = [[
+            'id' => 'ISSUE-99', 'title' => 'TypeError', 'file' => 'app/X.php', 'line' => 1,
+            'permalink' => '', 'events' => 2, 'status' => 'analyzed', 'root_cause' => 'x', 'tests' => '',
+        ]];
+
+        $json = json_encode(WebhookNotifier::sentrySummary($items, 'shop', false));
+        $this->assertStringNotContainsString('cg_sentry_fix', $json);
+    }
+
+    public function test_no_button_for_already_fixed_issue(): void
+    {
+        $items = [[
+            'id' => 'ISSUE-1', 'title' => 'TypeError', 'file' => 'app/X.php', 'line' => 1,
+            'permalink' => '', 'events' => 2, 'status' => 'fixed', 'root_cause' => 'x', 'tests' => 'passed',
+        ]];
+
+        $json = json_encode(WebhookNotifier::sentrySummary($items, 'shop', true));
+        $this->assertStringNotContainsString('cg_sentry_fix', $json);
+    }
 }

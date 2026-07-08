@@ -94,6 +94,18 @@ final class SentryClient
         return is_array($data) ? $data : null;
     }
 
+    /**
+     * Fetch a single issue by id (used when acting on one specific issue, e.g.
+     * from a Slack "Fix" button).
+     *
+     * @return array<string,mixed>|null
+     */
+    public function issue(string $issueId): ?array
+    {
+        $data = $this->get(sprintf('/api/0/issues/%s/', rawurlencode($issueId)));
+        return (is_array($data) && $data !== []) ? $data : null;
+    }
+
     /** Mark an issue resolved in Sentry. Returns true on success. */
     public function resolveIssue(string $issueId): bool
     {

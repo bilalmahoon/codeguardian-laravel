@@ -90,4 +90,45 @@ class SentryCommandTest extends TestCase
             ->expectsOutputToContain('TypeError: bad argument')
             ->assertExitCode(1); // "no-file" needs human attention → non-zero
     }
+
+    public function test_watch_processes_new_issue_once_and_stops(): void
+    {
+        // Fresh state file so this issue counts as "new".
+        @unlink(storage_path('codeguardian/sentry/state.json'));
+
+        $id    = 'WATCH-' . uniqid();
+        $issue = [
+            'id' => $id, 'title' => 'RuntimeException: watched', 'culprit' => 'App\\X::y',
+            'count' => 2, 'level' => 'error', 'permalink' => 'https://sentry.io/x/1/',
+        ];
+        $event = [
+            'entries' => [
+                ['type' => 'exception', 'data' => ['values' => [[
+                    'type' => 'RuntimeException', 'value' => 'boom',
+                    'stacktrace' => ['frames' => [
+                        ['filename' => '/var/www/app/Ghost.php', 'lineNo' => 3, 'in_app' => true],
+                    ]],
+                ]]]],
+            ],
+        ];
+
+        $this->fakeSentry([[$issue], $event]);
+
+        // One poll then stop; watch always exits SUCCESS.
+        $this->artisan('codeguardian:sentry --watch --max-iterations=1 --interval=5 --limit=1')
+            ->expectsOutputToContain('Watching Sentry')
+            ->expectsOutputToContain('RuntimeException: watched')
+            ->assertExitCode(0);
+
+        @unlink(storage_path('codeguardian/sentry/state.json'));
+    }
+
+    public function test_single_issue_not_found_fails(): void
+    {
+        // issue() endpoint returns empty object → treated as not found.
+        $this->fakeSentry([[]]);
+
+        $this->artisan('codeguardian:sentry --issue=NOPE')
+            ->assertExitCode(1);
+    }
 }

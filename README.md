@@ -757,14 +757,54 @@ CODEGUARDIAN_WEBHOOK_URL=https://hooks.slack.com/...# used by --slack when no UR
 | Flag | Effect |
 |------|--------|
 | `--limit=N` | Max unresolved issues to pull (default 10). |
+| `--issue=ID` | Handle one specific issue by ID (used by the Slack "Fix" button). |
 | `--fix` | Generate a targeted AI fix per issue (needs an AI provider key). |
 | `--apply` | Write the fix to disk (syntax-checked + backup + rollback). |
 | `--with-tests` | Run existing tests after applying; roll back on failure. |
 | `--resolve` | Mark the issue resolved in Sentry after a verified fix. |
 | `--slack[=URL]` | Post a summary to Slack (falls back to `CODEGUARDIAN_WEBHOOK_URL`). |
+| `--watch` | Continuously poll Sentry and auto-handle **new** issues only. |
+| `--interval=N` | Seconds between polls in `--watch` mode (default 60). |
 | `--dry-run` | Never write, resolve, or send — print what would happen. |
 
 The command exits non-zero when any issue still needs a human (unresolved, source not found in the repo, or an error), so it doubles as a cron/CI health check.
+
+**Let it watch and fix on its own.** Instead of a cron entry you can run a live watcher that observes Sentry and auto-fixes every new issue exactly once (a per-issue state file under `storage/codeguardian/sentry/` prevents re-fixing the same error):
+
+```bash
+# Observe production continuously; auto-fix + verify + resolve each NEW issue, and post to Slack
+php artisan codeguardian:sentry --watch --fix --apply --with-tests --resolve --slack
+```
+
+Or wire it into the Laravel scheduler for a hands-off loop:
+
+```php
+// app/Console/Kernel.php
+$schedule->command('codeguardian:sentry --fix --apply --with-tests --resolve --slack')
+         ->everyFiveMinutes()->withoutOverlapping();
+```
+
+### Slack channel integration (two-way)
+
+Beyond one-way notifications, CodeGuardian can be **driven from a Slack channel** through a Slack App — so your team fixes and resolves production issues without leaving Slack:
+
+- **Slash command** `/codeguardian sentry-fix` (also `sentry`, `analyze`, `security`, `performance`) launches a background run and posts the result back to the channel.
+- **Interactive "🛠️ Fix it" button** on any posted Sentry issue triggers a safe, test-verified auto-fix for that exact issue (and resolves it in Sentry).
+
+Set up the Slack App (at [api.slack.com/apps](https://api.slack.com/apps)) with two request URLs pointing at your app, then enable it:
+
+```dotenv
+CODEGUARDIAN_SLACK_ENABLED=true
+CODEGUARDIAN_SLACK_SIGNING_SECRET=xxxxx      # Slack App → Basic Information → Signing Secret
+CODEGUARDIAN_SLACK_INTERACTIVE=true          # add a "Fix" button to Sentry summaries
+```
+
+| Slack App setting | Request URL |
+|-------------------|-------------|
+| **Slash Commands** (`/codeguardian`) | `https://your-app.test/codeguardian/slack/command` |
+| **Interactivity & Shortcuts** | `https://your-app.test/codeguardian/slack/interact` |
+
+Every request is verified with Slack's **signing secret** (HMAC-SHA256 over the raw body + a 5-minute replay window), so these endpoints are safe to expose without app login — no session, no CSRF token, no user account required. Only a fixed whitelist of sub-commands can ever run; raw Slack text is never passed to a shell.
 
 ### Validate your config
 

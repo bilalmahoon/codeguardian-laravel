@@ -286,6 +286,35 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Slack Channel Integration (two-way)
+    |--------------------------------------------------------------------------
+    | Beyond one-way notifications (notifications.webhook), CodeGuardian can be
+    | driven FROM a Slack channel via a Slack App:
+    |
+    |   • Slash command  /codeguardian sentry|analyze|security …   → launches a
+    |     background run and streams the result to the dashboard + channel.
+    |   • Interactive "Fix" button on a posted Sentry issue          → triggers a
+    |     safe, test-verified auto-fix for that exact issue.
+    |
+    | Setup (api.slack.com/apps → your app):
+    |   1. Slash Commands  → Request URL: <app-url>/codeguardian/slack/command
+    |   2. Interactivity   → Request URL: <app-url>/codeguardian/slack/interact
+    |   3. Copy "Signing Secret" → CODEGUARDIAN_SLACK_SIGNING_SECRET
+    |
+    | Every request is verified with Slack's signing secret (HMAC + timestamp
+    | replay window), so the endpoints are safe to expose without app auth.
+    */
+
+    'slack' => [
+        'enabled'        => env('CODEGUARDIAN_SLACK_ENABLED', false),
+        'signing_secret' => env('CODEGUARDIAN_SLACK_SIGNING_SECRET', ''),
+        // When true, Sentry Slack summaries include a one-click "Fix" button
+        // (requires Interactivity configured above).
+        'interactive'    => env('CODEGUARDIAN_SLACK_INTERACTIVE', true),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Quality Gates / Budgets
     |--------------------------------------------------------------------------
     | When set, `codeguardian:analyze` fails (non-zero exit) if any budget is

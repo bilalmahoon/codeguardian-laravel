@@ -96,14 +96,18 @@ final class WebhookNotifier
      * issues were triaged, where they live, and what happened (fixed / preview /
      * analyzed / could-not-fix).
      *
-     * Each item: {title, file?, line?, permalink?, events?, status, root_cause?,
-     *             applied?, tests?}  where status is one of:
+     * Each item: {id?, title, file?, line?, permalink?, events?, status,
+     *             root_cause?, applied?, tests?}  where status is one of:
      *   fixed | preview | analyzed | unresolvable | no-file | error
+     *
+     * When $interactive is true, issues that are not yet fixed get a one-click
+     * "Fix" button (Slack Interactivity → cg_sentry_fix action) so the channel
+     * can trigger a safe auto-fix.
      *
      * @param  array<int,array<string,mixed>> $items
      * @return array<string,mixed>
      */
-    public static function sentrySummary(array $items, string $projectLabel = ''): array
+    public static function sentrySummary(array $items, string $projectLabel = '', bool $interactive = false): array
     {
         $fixed   = 0;
         $preview = 0;
@@ -129,6 +133,25 @@ final class WebhookNotifier
         foreach (array_slice($items, 0, 10) as $it) {
             $blocks[] = ['type' => 'divider'];
             $blocks[] = ['type' => 'section', 'text' => ['type' => 'mrkdwn', 'text' => self::sentryItemText($it)]];
+
+            // Offer a one-click fix for issues that are not fixed yet.
+            $fixable = $interactive
+                && ! empty($it['id'])
+                && in_array((string) ($it['status'] ?? ''), ['analyzed', 'preview', 'unresolvable'], true);
+
+            if ($fixable) {
+                $blocks[] = [
+                    'type'     => 'actions',
+                    'block_id' => 'cg_issue_' . $it['id'],
+                    'elements' => [[
+                        'type'      => 'button',
+                        'style'     => 'primary',
+                        'text'      => ['type' => 'plain_text', 'text' => '🛠️ Fix it', 'emoji' => true],
+                        'action_id' => 'cg_sentry_fix',
+                        'value'     => (string) $it['id'],
+                    ]],
+                ];
+            }
         }
 
         return [
