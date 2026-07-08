@@ -718,6 +718,54 @@ php artisan codeguardian:notify --dry-run        # preview the payload
 
 Set a default endpoint via `CODEGUARDIAN_WEBHOOK_URL`. Supports Slack, Microsoft Teams, and a generic JSON shape.
 
+### Sentry → auto-fix → Slack
+
+Connect your Sentry project and let CodeGuardian close the loop on production errors: it pulls unresolved issues, traces each one to the **exact offending file and line** from the stack trace, analyzes it, and can generate a **safe, test-verified AI fix** — then report to Slack and (optionally) mark the issue resolved.
+
+```bash
+# 1. Triage only — locate each production error in your code and analyze it (no writes)
+php artisan codeguardian:sentry
+
+# 2. Generate a targeted AI fix for each issue and preview it (still no writes to source)
+php artisan codeguardian:sentry --fix
+
+# 3. Full auto-fix: write the fix, verify with your test suite, roll back on regression
+php artisan codeguardian:sentry --fix --apply --with-tests
+
+# 4. Team workflow: fix, verify, mark resolved in Sentry, and post a Slack summary
+php artisan codeguardian:sentry --fix --apply --with-tests --resolve --slack
+```
+
+Configure it in `.env`:
+
+```dotenv
+CODEGUARDIAN_SENTRY_TOKEN=xxxxx          # Sentry auth token (scopes: event:read, project:read, event:write*)
+CODEGUARDIAN_SENTRY_ORG=your-org-slug
+CODEGUARDIAN_SENTRY_PROJECT=your-project-slug
+# Optional:
+CODEGUARDIAN_SENTRY_URL=https://sentry.io          # self-hosted: your instance URL
+CODEGUARDIAN_SENTRY_ENVIRONMENT=production          # only pull issues from this environment
+CODEGUARDIAN_WEBHOOK_URL=https://hooks.slack.com/...# used by --slack when no URL is given
+```
+
+<sub>* `event:write` is only needed for `--resolve`.</sub>
+
+**How it stays safe.** Every write goes through the same foolproof net as refactoring: the AI returns the complete file, it is **syntax-checked (`php -l`)**, a **timestamped backup** is kept, and if `--with-tests` sees your existing tests fail, the change is **automatically rolled back**. Without `--apply`, nothing on disk changes — the proposed fix is saved under `storage/codeguardian/sentry/` for review. If the AI decides the real fix belongs elsewhere, it reports that instead of guessing.
+
+**Flags**
+
+| Flag | Effect |
+|------|--------|
+| `--limit=N` | Max unresolved issues to pull (default 10). |
+| `--fix` | Generate a targeted AI fix per issue (needs an AI provider key). |
+| `--apply` | Write the fix to disk (syntax-checked + backup + rollback). |
+| `--with-tests` | Run existing tests after applying; roll back on failure. |
+| `--resolve` | Mark the issue resolved in Sentry after a verified fix. |
+| `--slack[=URL]` | Post a summary to Slack (falls back to `CODEGUARDIAN_WEBHOOK_URL`). |
+| `--dry-run` | Never write, resolve, or send — print what would happen. |
+
+The command exits non-zero when any issue still needs a human (unresolved, source not found in the repo, or an error), so it doubles as a cron/CI health check.
+
 ### Validate your config
 
 ```bash

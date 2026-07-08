@@ -260,6 +260,32 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Sentry Integration
+    |--------------------------------------------------------------------------
+    | Connect CodeGuardian to your Sentry project so `codeguardian:sentry` can:
+    |   1. Pull unresolved production issues (errors/exceptions),
+    |   2. Trace each one to the exact offending file + line from the stack trace,
+    |   3. Analyze it and (optionally) generate a safe, test-verified AI fix,
+    |   4. Post a summary to Slack, and optionally mark the issue resolved.
+    |
+    | Create a token at: Sentry → Settings → Auth Tokens (or an internal
+    | integration) with scopes: `event:read`, `project:read`, and `event:write`
+    | (only needed if you use --resolve). Self-hosted Sentry: set `url`.
+    */
+
+    'sentry' => [
+        'token'       => env('CODEGUARDIAN_SENTRY_TOKEN', ''),
+        'organization'=> env('CODEGUARDIAN_SENTRY_ORG', ''),
+        'project'     => env('CODEGUARDIAN_SENTRY_PROJECT', ''),
+        // Base URL of the Sentry API. Cloud = https://sentry.io; self-hosted =
+        // your instance, e.g. https://sentry.mycompany.com
+        'url'         => env('CODEGUARDIAN_SENTRY_URL', 'https://sentry.io'),
+        // Optional: only pull issues seen in this environment (e.g. "production").
+        'environment' => env('CODEGUARDIAN_SENTRY_ENVIRONMENT', ''),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Quality Gates / Budgets
     |--------------------------------------------------------------------------
     | When set, `codeguardian:analyze` fails (non-zero exit) if any budget is

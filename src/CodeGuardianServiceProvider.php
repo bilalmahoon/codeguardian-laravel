@@ -28,6 +28,7 @@ use CodeGuardian\Laravel\Commands\RefactorCommand;
 use CodeGuardian\Laravel\Commands\ReportCommand;
 use CodeGuardian\Laravel\Commands\ReviewCommand;
 use CodeGuardian\Laravel\Commands\RulesCommand;
+use CodeGuardian\Laravel\Commands\SentryCommand;
 use CodeGuardian\Laravel\Commands\TestImpactCommand;
 use CodeGuardian\Laravel\Commands\TrendCommand;
 use CodeGuardian\Laravel\Commands\SecurityScanCommand;
@@ -36,6 +37,7 @@ use CodeGuardian\Laravel\Http\Middleware\Authorize;
 use CodeGuardian\Laravel\Support\CachedPhpParser;
 use CodeGuardian\Laravel\Support\FileTypeDetector;
 use CodeGuardian\Laravel\Support\RunStore;
+use CodeGuardian\Laravel\Support\SentryClient;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 
@@ -73,6 +75,10 @@ class CodeGuardianServiceProvider extends ServiceProvider
 
         // Web dashboard run/history store
         $this->app->singleton(RunStore::class, fn() => RunStore::fromConfig());
+
+        // Sentry client (bind, not singleton) so tests can swap in a mocked
+        // HTTP handler and so config changes are picked up per resolution.
+        $this->app->bind(SentryClient::class, fn() => SentryClient::fromConfig());
     }
 
     public function boot(): void
@@ -113,6 +119,7 @@ class CodeGuardianServiceProvider extends ServiceProvider
                 NotifyCommand::class,
                 ConfigCheckCommand::class,
                 TestImpactCommand::class,
+                SentryCommand::class,
             ]);
         }
     }

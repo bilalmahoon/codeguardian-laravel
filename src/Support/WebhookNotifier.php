@@ -91,6 +91,102 @@ final class WebhookNotifier
         ];
     }
 
+    /**
+     * Slack payload summarising a `codeguardian:sentry` run: which production
+     * issues were triaged, where they live, and what happened (fixed / preview /
+     * analyzed / could-not-fix).
+     *
+     * Each item: {title, file?, line?, permalink?, events?, status, root_cause?,
+     *             applied?, tests?}  where status is one of:
+     *   fixed | preview | analyzed | unresolvable | no-file | error
+     *
+     * @param  array<int,array<string,mixed>> $items
+     * @return array<string,mixed>
+     */
+    public static function sentrySummary(array $items, string $projectLabel = ''): array
+    {
+        $fixed   = 0;
+        $preview = 0;
+        $failed  = 0;
+        foreach ($items as $it) {
+            $st = (string) ($it['status'] ?? '');
+            if ($st === 'fixed')                              { $fixed++; }
+            elseif ($st === 'preview')                        { $preview++; }
+            elseif (in_array($st, ['unresolvable', 'no-file', 'error'], true)) { $failed++; }
+        }
+
+        $emoji  = $fixed > 0 ? '🛠️' : ($failed > 0 ? '🔴' : '🔍');
+        $prefix = $projectLabel !== '' ? "{$projectLabel} — " : '';
+        $header = sprintf('%s *%sCodeGuardian × Sentry* — %d issue%s triaged',
+            $emoji, $prefix, count($items), count($items) === 1 ? '' : 's');
+        $line   = sprintf('Fixed: *%d*  ·  Preview: *%d*  ·  Needs attention: *%d*', $fixed, $preview, $failed);
+
+        $blocks = [
+            ['type' => 'section', 'text' => ['type' => 'mrkdwn', 'text' => $header]],
+            ['type' => 'section', 'text' => ['type' => 'mrkdwn', 'text' => $line]],
+        ];
+
+        foreach (array_slice($items, 0, 10) as $it) {
+            $blocks[] = ['type' => 'divider'];
+            $blocks[] = ['type' => 'section', 'text' => ['type' => 'mrkdwn', 'text' => self::sentryItemText($it)]];
+        }
+
+        return [
+            'text'   => "{$header}\n{$line}",
+            'blocks' => $blocks,
+        ];
+    }
+
+    /** @param array<string,mixed> $it */
+    private static function sentryItemText(array $it): string
+    {
+        $badge = match ((string) ($it['status'] ?? '')) {
+            'fixed'        => '🛠️ *Fixed*',
+            'preview'      => '📝 *Fix ready (preview)*',
+            'analyzed'     => '🔍 *Analyzed*',
+            'unresolvable' => '⚠️ *Could not auto-fix*',
+            'no-file'      => '❓ *Source not found in repo*',
+            default        => '🔴 *Error*',
+        };
+
+        $title = (string) ($it['title'] ?? 'Unknown issue');
+        if (! empty($it['permalink'])) {
+            $title = '<' . $it['permalink'] . '|' . self::escapeSlack($title) . '>';
+        } else {
+            $title = self::escapeSlack($title);
+        }
+
+        $text = "{$badge}\n{$title}";
+
+        if (! empty($it['file'])) {
+            $loc = '`' . $it['file'] . (! empty($it['line']) ? ':' . $it['line'] : '') . '`';
+            $text .= "\n📄 {$loc}";
+        }
+        if (! empty($it['events'])) {
+            $text .= "  ·  {$it['events']}× in prod";
+        }
+        if (! empty($it['root_cause'])) {
+            $text .= "\n_" . self::escapeSlack(self::clip((string) $it['root_cause'], 240)) . '_';
+        }
+        if (isset($it['tests']) && $it['tests'] !== '') {
+            $t = (string) $it['tests'];
+            $icon = $t === 'passed' ? '✅' : ($t === 'failed' ? '❌' : '⏭️');
+            $text .= "\n{$icon} Tests: {$t}";
+        }
+
+        return $text;
+    }
+
+    private static function clip(string $s, int $max): string
+    {
+        return mb_strlen($s) > $max ? mb_substr($s, 0, $max - 1) . '…' : $s;
+    }
+
+    private static function escapeSlack(string $s): string
+    {
+        return str_replace(['&', '<', '>'], ['&amp;', '&lt;', '&gt;'], $s);
+    }
+
     /** Build the payload for a named format. @return array<string,mixed> */
     public static function build(string $format, array $results, string $projectLabel = ''): array
     {
