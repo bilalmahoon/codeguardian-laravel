@@ -339,7 +339,15 @@ class DashboardController
 
         // Refactor always runs non-interactively from the web, and uses the
         // foolproof safe loop (generate test → refactor → verify → auto-rollback).
+        // The UI's "mode" dropdown is really the ENGINE choice (static/hybrid/ai),
+        // so route it to --engine and keep --mode for the (auto) workflow. This
+        // makes "Static only" a true, AI-free refactor even if config is hybrid.
         if ($operation === 'refactor') {
+            $engine = isset($options['mode']) && is_string($options['mode']) ? $options['mode'] : '';
+            unset($options['mode']);
+            if (in_array($engine, ['static', 'hybrid', 'ai'], true)) {
+                $options['engine'] = $engine;
+            }
             $options['mode'] = 'auto';
             $options['safe'] = true;
         }

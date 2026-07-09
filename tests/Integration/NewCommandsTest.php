@@ -140,6 +140,67 @@ PHP);
             ->assertExitCode(1);
     }
 
+    public function test_refactor_engine_static_overrides_hybrid_config(): void
+    {
+        // Config says hybrid + a key is present — but --engine=static must win
+        // and keep the refactor AI-free (no Claude calls, no cost).
+        config()->set('codeguardian.mode', 'hybrid');
+        config()->set('codeguardian.provider', 'claude');
+        config()->set('codeguardian.claude.key', 'sk-ant-test-key');
+
+        $this->artisan("codeguardian:refactor --path={$this->dir} --engine=static --mode=auto --skip-tests")
+            ->expectsOutputToContain('Static only')
+            ->assertExitCode(0);
+    }
+
+    public function test_security_scan_explicit_static_mode_stays_static(): void
+    {
+        config()->set('codeguardian.provider', 'claude');
+        config()->set('codeguardian.claude.key', 'sk-ant-test-key');
+
+        $this->writeFile('app/Http/Controllers/CleanController.php', <<<'PHP'
+<?php
+namespace App\Http\Controllers;
+class CleanController extends Controller { public function index(): int { return 1; } }
+PHP);
+
+        $this->artisan("codeguardian:security --path={$this->dir} --plain --mode=static --output={$this->dir}/rep")
+            ->expectsOutputToContain('Static engine')
+            ->assertExitCode(0);
+    }
+
+    public function test_performance_scan_explicit_static_mode_stays_static(): void
+    {
+        config()->set('codeguardian.provider', 'claude');
+        config()->set('codeguardian.claude.key', 'sk-ant-test-key');
+
+        $this->writeFile('app/Http/Controllers/CleanController.php', <<<'PHP'
+<?php
+namespace App\Http\Controllers;
+class CleanController extends Controller { public function index(): int { return 1; } }
+PHP);
+
+        $this->artisan("codeguardian:performance --path={$this->dir} --plain --mode=static --output={$this->dir}/rep")
+            ->expectsOutputToContain('Static engine')
+            ->assertExitCode(0);
+    }
+
+    public function test_generate_tests_explicit_static_mode_stays_static(): void
+    {
+        config()->set('codeguardian.provider', 'claude');
+        config()->set('codeguardian.claude.key', 'sk-ant-test-key');
+
+        $this->writeFile('app/Http/Controllers/CleanController.php', <<<'PHP'
+<?php
+namespace App\Http\Controllers;
+class CleanController extends Controller { public function index(): int { return 1; } }
+PHP);
+
+        $this->artisan("codeguardian:test --path={$this->dir} --dry-run --mode=static")
+            ->expectsOutputToContain('Static engine')
+            ->assertExitCode(0);
+    }
+
     public function test_analyze_quality_gate_fails_when_budget_breached(): void
     {
         config()->set('codeguardian.gates', ['max_total' => 0]);

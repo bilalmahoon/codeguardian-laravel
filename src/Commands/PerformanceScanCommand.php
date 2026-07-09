@@ -176,9 +176,26 @@ class PerformanceScanCommand extends Command
 
     private function resolveMode(): string
     {
-        $explicit = $this->option('mode') ?: config('codeguardian.mode', 'static');
-        if ($explicit !== 'static') return $explicit;
+        // An explicit --mode is authoritative and is NEVER auto-upgraded, so
+        // --mode=static stays static (no AI calls, no cost) even with a key set.
+        $optMode = $this->option('mode');
+        if (is_string($optMode) && trim($optMode) !== '') {
+            return $this->normalizeMode($optMode);
+        }
+
+        $configMode = $this->normalizeMode((string) config('codeguardian.mode', 'static'));
+        if ($configMode !== 'static') {
+            return $configMode;
+        }
+
         return AiClient::hasApiKey() ? 'hybrid' : 'static';
+    }
+
+    /** Whitelist a mode string; anything unknown falls back to static. */
+    private function normalizeMode(string $mode): string
+    {
+        $mode = strtolower(trim($mode));
+        return in_array($mode, ['static', 'hybrid', 'ai'], true) ? $mode : 'static';
     }
 
     /** @return array{0: array, 1: int, 2: string|null} [findings, score, biggestWin] */

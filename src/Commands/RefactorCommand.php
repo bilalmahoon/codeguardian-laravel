@@ -89,7 +89,8 @@ class RefactorCommand extends Command
                             {--file=              : Refactor a single file + its dependency chain (e.g. app/Services/AuthService.php)}
                             {--files=             : Refactor several specific files (comma-separated paths)}
                             {--type=              : Project type: laravel or flutter}
-                            {--mode=              : Execution mode: interactive (default) or auto}
+                            {--mode=              : Workflow: interactive (default) or auto. static|hybrid|ai here are treated as an engine override.}
+                            {--engine=            : AI engine: static | hybrid | ai. Overrides config codeguardian.mode and is NEVER auto-upgraded.}
                             {--safe                 : Foolproof mode — auto-rollback any file whose refactor introduces a NEW test failure (no prompts)}
                             {--no-backup            : Skip creating backups before modifying files}
                             {--skip-tests           : Skip test execution (not recommended)}
@@ -162,7 +163,21 @@ class RefactorCommand extends Command
     ): int {
         $this->projectRoot          = $this->option('path') ?: base_path();
         $this->projectType          = $this->option('type') ?: $this->detectType();
-        $this->interactiveMode      = ($this->option('mode') ?? 'interactive') === 'interactive';
+
+        // --mode is the WORKFLOW (interactive|auto). For convenience an engine
+        // value (static|hybrid|ai) passed via --mode is treated as an engine
+        // override instead — so `--mode=static` behaves the way users expect
+        // (static engine) rather than silently turning into a non-interactive run.
+        $engineModes = ['static', 'hybrid', 'ai'];
+        $modeOpt     = strtolower(trim((string) ($this->option('mode') ?? '')));
+        $engineOpt   = strtolower(trim((string) ($this->option('engine') ?? '')));
+        $engineOverride = in_array($engineOpt, $engineModes, true)
+            ? $engineOpt
+            : (in_array($modeOpt, $engineModes, true) ? $modeOpt : null);
+
+        // Interactive by default; ONLY an explicit workflow 'auto' turns prompts
+        // off. An engine value in --mode no longer makes the run non-interactive.
+        $this->interactiveMode      = ($modeOpt !== 'auto');
         $this->backupEnabled        = ! $this->option('no-backup');
         $this->testsEnabled         = ! $this->option('skip-tests');
         $this->existingTestsEnabled = (bool) $this->option('with-existing-tests');
@@ -170,12 +185,13 @@ class RefactorCommand extends Command
         // non-interactive run (e.g. the web dashboard) where we can't prompt.
         $this->safeMode             = (bool) $this->option('safe')
                                     || (bool) config('codeguardian.refactor.safe_mode', false)
-                                    || ($this->option('mode') === 'auto');
+                                    || $modeOpt === 'auto';
         $this->backups              = [];
         $this->orchestrator         = new StaticOrchestrator();
 
-        // Detect AI mode
-        $this->aiMode    = config('codeguardian.mode', 'static');
+        // Engine (AI) mode — an explicit --engine / --mode=static|hybrid|ai wins
+        // and is NEVER auto-upgraded. Otherwise fall back to config. static ⇒ no AI.
+        $this->aiMode    = $engineOverride ?? (string) config('codeguardian.mode', 'static');
         $provider        = config('codeguardian.provider', 'openai');
         $keyMap          = ['claude' => 'claude.key', 'openai' => 'openai.key', 'gemini' => 'gemini.key'];
         $keyPath         = $keyMap[$provider] ?? 'openai.key';
