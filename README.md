@@ -259,6 +259,23 @@ From there you can:
 - **Browse full history** — every past run is listed with its type, target, status, and a link to open its saved HTML/JSON report. The history page also shows a **project-health snapshot** (score, risk, open issues, trend) at a glance.
 - **Explore findings interactively** — a completed analyze run gets a **Findings explorer**: filter by severity, search by title/file/category, and see each issue with its location and recommendation — no need to open the raw JSON.
 - **Track trends on the Insights page** (`/codeguardian/insights`) — quality-score and risk **trend charts** over time, severity and **top-category breakdowns**, **quality dimensions**, and **hotspot files**, all built from your run history and latest report.
+- **Monitor production from the same place** — first-class **Sentry** and **Slack** panels (see below) turn CodeGuardian into a single hub: analyze code, watch incidents, investigate, and fix.
+
+### Integrations panels (Sentry, Slack, and beyond)
+
+CodeGuardian's dashboard is **integration-driven**: each external system is a plugin surfaced as its own nav item + page. Two ship today, and the navigation updates itself as more are added.
+
+- **Sentry** (`/codeguardian/sentry`) — browse production exceptions with filters for **status, level, environment, project, and date**. Open any issue for full detail: exception type/message, the crashing stack frame, the **exact local file** it maps to, and a ready-to-run auto-fix command.
+- **Slack** (`/codeguardian/slack`) — read recent messages from your team's **alert/incident channels** without leaving CodeGuardian, so you can investigate an incident next to the code.
+
+Both panels show a guided **setup card** until configured. Slack's read panel needs a bot token:
+
+```dotenv
+CODEGUARDIAN_SLACK_BOT_TOKEN=xoxb-...                       # scopes: channels:history, channels:read
+CODEGUARDIAN_SLACK_CHANNELS=C0123456:alerts,C0789012:incidents
+```
+
+**Extensible by design.** Adding an integration (Grafana, Jira, GitHub/Bitbucket, …) is a single `IntegrationRegistry::register()` call plus a view — no layout, routing, or nav edits. Placeholder "coming soon" items already demonstrate the pattern. UI, business logic, and API layers are separated (`Integrations\*`, `Support\SentryClient`/`SlackService`, controllers under `Http\Controllers\Integrations`), following SOLID so future actions (resolve, ignore, assign, comment, reply) slot in without reworking the listings.
 
 ### Security
 

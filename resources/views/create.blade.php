@@ -8,7 +8,7 @@
 
     @unless($aiReady['enabled'])
         <div class="banner warn">
-            No AI provider configured — runs use the static engine only. For expert-level (Claude) analysis &
+            No AI provider configured — runs use the static engine only. For expert-level AI analysis &
             refactoring, set <span class="mono">CODEGUARDIAN_MODE=hybrid</span> and your provider API key in <span class="mono">.env</span>.
         </div>
     @endunless

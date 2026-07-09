@@ -59,6 +59,83 @@ final class SentryClient
         return $missing;
     }
 
+    public function defaultProject(): string { return $this->project; }
+    public function defaultEnvironment(): string { return $this->environment; }
+    public function organization(): string { return $this->organization; }
+
+    /**
+     * List issues for the dashboard with rich, user-driven filters. Unlike
+     * {@see unresolvedIssues()} (the auto-fix pipeline's narrow view), this
+     * powers the browsable Sentry panel.
+     *
+     * @param  array{status?:string,level?:string,environment?:string,period?:string,project?:string,query?:string} $filters
+     * @return array<int,array<string,mixed>>
+     */
+    public function listIssues(array $filters = [], int $limit = 25): array
+    {
+        $built   = self::buildIssueQuery($filters, $this->environment);
+        $project = trim((string) ($filters['project'] ?? '')) ?: $this->project;
+
+        $path = sprintf(
+            '/api/0/projects/%s/%s/issues/?query=%s&statsPeriod=%s&limit=%d',
+            rawurlencode($this->organization),
+            rawurlencode($project),
+            rawurlencode($built['query']),
+            rawurlencode($built['statsPeriod']),
+            max(1, min($limit, 100)),
+        );
+
+        $data = $this->get($path);
+        return is_array($data) ? array_values(array_filter($data, 'is_array')) : [];
+    }
+
+    /**
+     * Projects available to the token (for the project filter dropdown).
+     *
+     * @return array<int,array{slug:string,name:string}>
+     */
+    public function projects(): array
+    {
+        $data = $this->get(sprintf('/api/0/organizations/%s/projects/', rawurlencode($this->organization)));
+        if (! is_array($data)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($data as $p) {
+            if (is_array($p) && ! empty($p['slug'])) {
+                $out[] = ['slug' => (string) $p['slug'], 'name' => (string) ($p['name'] ?? $p['slug'])];
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Environment names seen in the project (for the environment filter).
+     *
+     * @return array<int,string>
+     */
+    public function environments(): array
+    {
+        $data = $this->get(sprintf(
+            '/api/0/projects/%s/%s/environments/',
+            rawurlencode($this->organization),
+            rawurlencode($this->project),
+        ));
+        if (! is_array($data)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($data as $e) {
+            $name = is_array($e) ? (string) ($e['name'] ?? '') : (is_string($e) ? $e : '');
+            if ($name !== '') {
+                $out[] = $name;
+            }
+        }
+        return array_values(array_unique($out));
+    }
+
     /**
      * Fetch unresolved issues, newest-first, capped at $limit.
      *
@@ -117,6 +194,55 @@ final class SentryClient
 
     // ─── Pure helpers (no network) ──────────────────────────────────────────
 
+    /** Statuses the UI may filter by → Sentry `is:` token. */
+    public const STATUSES = ['unresolved', 'resolved', 'ignored'];
+
+    /** Severity levels the UI may filter by. */
+    public const LEVELS = ['fatal', 'error', 'warning', 'info', 'debug'];
+
+    /** Date windows the UI may filter by → Sentry `statsPeriod`. */
+    public const PERIODS = ['24h', '7d', '14d', '30d', '90d'];
+
+    /**
+     * Turn UI filters into a Sentry search query + statsPeriod. Pure and
+     * whitelisted: unknown values are dropped so nothing untrusted reaches the
+     * API. An explicit `query` filter is appended verbatim for power users.
+     *
+     * @param  array<string,mixed> $filters
+     * @param  string $defaultEnv  Fall back to this environment when none chosen.
+     * @return array{query:string,statsPeriod:string}
+     */
+    public static function buildIssueQuery(array $filters, string $defaultEnv = ''): array
+    {
+        $status = (string) ($filters['status'] ?? 'unresolved');
+        if (! in_array($status, self::STATUSES, true)) {
+            $status = 'unresolved';
+        }
+        $parts = ['is:' . $status];
+
+        $level = (string) ($filters['level'] ?? '');
+        if (in_array($level, self::LEVELS, true)) {
+            $parts[] = 'level:' . $level;
+        }
+
+        $env = trim((string) ($filters['environment'] ?? '')) ?: $defaultEnv;
+        if ($env !== '') {
+            $parts[] = 'environment:' . $env;
+        }
+
+        $extra = trim((string) ($filters['query'] ?? ''));
+        if ($extra !== '') {
+            $parts[] = $extra;
+        }
+
+        $period = (string) ($filters['period'] ?? '14d');
+        if (! in_array($period, self::PERIODS, true)) {
+            $period = '14d';
+        }
+
+        return ['query' => implode(' ', $parts), 'statsPeriod' => $period];
+    }
+
     /**
      * Compact, human-readable summary of an issue for logs/Slack.
      *
@@ -132,6 +258,25 @@ final class SentryClient
             'count'     => (int) ($issue['count'] ?? 0),
             'level'     => (string) ($issue['level'] ?? 'error'),
             'permalink' => (string) ($issue['permalink'] ?? ''),
+        ];
+    }
+
+    /**
+     * Richer, display-ready view of an issue for the dashboard panel.
+     *
+     * @param  array<string,mixed> $issue
+     * @return array{id:string,title:string,culprit:string,count:int,userCount:int,level:string,status:string,permalink:string,firstSeen:string,lastSeen:string,shortId:string}
+     */
+    public static function panelSummary(array $issue): array
+    {
+        $base = self::summariseIssue($issue);
+
+        return $base + [
+            'userCount' => (int) ($issue['userCount'] ?? 0),
+            'status'    => (string) ($issue['status'] ?? 'unresolved'),
+            'firstSeen' => (string) ($issue['firstSeen'] ?? ''),
+            'lastSeen'  => (string) ($issue['lastSeen'] ?? ''),
+            'shortId'   => (string) ($issue['shortId'] ?? ''),
         ];
     }
 

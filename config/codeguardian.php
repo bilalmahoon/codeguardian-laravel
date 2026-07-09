@@ -311,6 +311,26 @@ return [
         // When true, Sentry Slack summaries include a one-click "Fix" button
         // (requires Interactivity configured above).
         'interactive'    => env('CODEGUARDIAN_SLACK_INTERACTIVE', true),
+
+        // Read side — powers the in-dashboard Slack panel (view dev messages /
+        // incident feed). Create a Slack bot token (xoxb-…) with the
+        // `channels:history` + `channels:read` (or `groups:history`) scopes and
+        // invite the bot to the channels you want to watch.
+        'bot_token'      => env('CODEGUARDIAN_SLACK_BOT_TOKEN', ''),
+        // Channels shown in the dashboard. Either set this array in the published
+        // config, or use CODEGUARDIAN_SLACK_CHANNELS="C0123:alerts,C0456:incidents".
+        'channels'       => array_values(array_filter(array_map(
+            static function (string $pair): ?array {
+                $pair = trim($pair);
+                if ($pair === '') {
+                    return null;
+                }
+                [$id, $label] = array_pad(explode(':', $pair, 2), 2, '');
+                $id = trim($id);
+                return $id === '' ? null : ['id' => $id, 'label' => trim($label) ?: $id];
+            },
+            explode(',', (string) env('CODEGUARDIAN_SLACK_CHANNELS', ''))
+        ))),
     ],
 
     /*

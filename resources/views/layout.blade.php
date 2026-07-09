@@ -61,8 +61,29 @@
         .inline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
         .mono { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
         .check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
-        .navlink { color: var(--muted); font-size: 14px; font-weight: 600; }
-        .navlink:hover { color: var(--text); text-decoration: none; }
+        .navlink { color: var(--muted); font-size: 14px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;
+            padding: 6px 10px; border-radius: 8px; }
+        .navlink:hover { color: var(--text); text-decoration: none; background: #ffffff08; }
+        .navlink.active { color: var(--text); background: #5b8cff1f; }
+        .navlink .ic { font-size: 13px; opacity: .9; }
+        .navlink .sdot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); display: inline-block; }
+        .navlink .sdot.on { background: var(--green); }
+        .nav-sep { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
+        /* Integrations "More" dropdown (JS-free via <details>) */
+        details.nav-more { position: relative; }
+        details.nav-more > summary { list-style: none; cursor: pointer; }
+        details.nav-more > summary::-webkit-details-marker { display: none; }
+        details.nav-more .menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 30;
+            background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+            min-width: 240px; padding: 6px; box-shadow: 0 14px 36px #000a; }
+        details.nav-more .menu a, details.nav-more .menu span.soon {
+            display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px;
+            font-size: 13.5px; font-weight: 600; color: var(--text); }
+        details.nav-more .menu a:hover { background: #5b8cff1f; text-decoration: none; }
+        details.nav-more .menu span.soon { color: var(--muted); cursor: default; }
+        details.nav-more .menu .tag { margin-left: auto; font-size: 10px; font-weight: 700; text-transform: uppercase;
+            letter-spacing: .5px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; }
+        details.nav-more .menu .desc { font-size: 11.5px; color: var(--muted); font-weight: 500; }
         /* Insights / explorer components */
         .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
         @media (max-width: 720px) { .stats { grid-template-columns: repeat(2, 1fr); } }
@@ -120,17 +141,45 @@
     </style>
 </head>
 <body>
+    @php
+        $cgIntegrations = $cgIntegrations ?? [];
+        $cgLive = array_values(array_filter($cgIntegrations, fn($i) => $i['available']));
+        $cgSoon = array_values(array_filter($cgIntegrations, fn($i) => ! $i['available']));
+    @endphp
     <header class="top">
         <div class="wrap">
             <a href="{{ route('codeguardian.index') }}" class="brand"><span>◆ CodeGuardian</span></a>
-            <a href="{{ route('codeguardian.index') }}" class="navlink">History</a>
-            <a href="{{ route('codeguardian.insights') }}" class="navlink">Insights</a>
-            <div class="grow"></div>
-            @if(!empty($aiReady))
-                <span class="mono">
-                    {{ $aiReady['enabled'] ? '🤖 AI: '.$aiReady['provider'].' / '.$aiReady['model'] : '⚡ Static only (no AI key)' }}
-                </span>
+            <a href="{{ route('codeguardian.index') }}" class="navlink {{ request()->routeIs('codeguardian.index') ? 'active' : '' }}">History</a>
+            <a href="{{ route('codeguardian.insights') }}" class="navlink {{ request()->routeIs('codeguardian.insights') ? 'active' : '' }}">Insights</a>
+
+            @if($cgLive)
+                <span class="nav-sep"></span>
+                @foreach($cgLive as $ig)
+                    <a href="{{ $ig['route'] ? route($ig['route']) : '#' }}"
+                       class="navlink {{ $ig['route'] && request()->routeIs(str_replace('.index', '', $ig['route']).'*') ? 'active' : '' }}"
+                       title="{{ $ig['description'] }}{{ $ig['configured'] ? '' : ' (needs setup)' }}">
+                        <span class="ic">{{ $ig['icon'] }}</span>{{ $ig['label'] }}
+                        <span class="sdot {{ $ig['configured'] ? 'on' : '' }}"></span>
+                    </a>
+                @endforeach
             @endif
+
+            @if($cgSoon)
+                <details class="nav-more">
+                    <summary class="navlink">More ▾</summary>
+                    <div class="menu">
+                        @foreach($cgSoon as $ig)
+                            <span class="soon">
+                                <span class="ic">{{ $ig['icon'] }}</span>
+                                <span>{{ $ig['label'] }}<br><span class="desc">{{ $ig['description'] }}</span></span>
+                                <span class="tag">Soon</span>
+                            </span>
+                        @endforeach
+                    </div>
+                </details>
+            @endif
+
+            <div class="grow"></div>
             <a href="{{ route('codeguardian.create') }}" class="btn">+ New run</a>
         </div>
     </header>

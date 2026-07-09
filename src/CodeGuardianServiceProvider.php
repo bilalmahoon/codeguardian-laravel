@@ -35,11 +35,17 @@ use CodeGuardian\Laravel\Commands\SecurityScanCommand;
 use CodeGuardian\Laravel\Commands\WatchCommand;
 use CodeGuardian\Laravel\Http\Middleware\Authorize;
 use CodeGuardian\Laravel\Http\Middleware\VerifySlackSignature;
+use CodeGuardian\Laravel\Integrations\ComingSoonIntegration;
+use CodeGuardian\Laravel\Integrations\IntegrationRegistry;
+use CodeGuardian\Laravel\Integrations\SentryIntegration;
+use CodeGuardian\Laravel\Integrations\SlackIntegration;
 use CodeGuardian\Laravel\Support\CachedPhpParser;
 use CodeGuardian\Laravel\Support\FileTypeDetector;
 use CodeGuardian\Laravel\Support\RunStore;
 use CodeGuardian\Laravel\Support\SentryClient;
+use CodeGuardian\Laravel\Support\SlackService;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 
 class CodeGuardianServiceProvider extends ServiceProvider
@@ -80,11 +86,32 @@ class CodeGuardianServiceProvider extends ServiceProvider
         // Sentry client (bind, not singleton) so tests can swap in a mocked
         // HTTP handler and so config changes are picked up per resolution.
         $this->app->bind(SentryClient::class, fn() => SentryClient::fromConfig());
+
+        // Slack read client for the in-dashboard panel (bind for the same reason).
+        $this->app->bind(SlackService::class, fn() => SlackService::fromConfig());
+
+        // Integration catalogue that drives the dashboard navigation. Register
+        // built-in integrations here; a future one is a single ->register() call.
+        $this->app->singleton(IntegrationRegistry::class, function () {
+            return (new IntegrationRegistry())
+                ->register(new SentryIntegration())
+                ->register(new SlackIntegration())
+                ->register(new ComingSoonIntegration('grafana', 'Grafana', '📊', 'Dashboards & metrics (coming soon).', 30))
+                ->register(new ComingSoonIntegration('jira', 'Jira', '🧭', 'Issue tracking & tickets (coming soon).', 40))
+                ->register(new ComingSoonIntegration('github', 'GitHub', '🐙', 'Pull requests & code hosting (coming soon).', 50));
+        });
     }
 
     public function boot(): void
     {
         $this->loadViewsFrom(__DIR__ . '/../resources/views', 'codeguardian');
+
+        // Share the integration-driven navigation with the shared layout so every
+        // dashboard page gets a consistent, self-updating nav.
+        View::composer('codeguardian::layout', function ($view) {
+            $view->with('cgIntegrations', $this->app->make(IntegrationRegistry::class)->navItems());
+        });
+
         $this->registerDashboardRoutes();
         $this->registerSlackRoutes();
 
