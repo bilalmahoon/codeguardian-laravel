@@ -210,7 +210,8 @@ class AnalyzeCommand extends Command
         // maintainability/testability/reliability) — anchored to analyzer scores.
         $results['quality'] = QualityScorer::assess(
             $results['all_findings'] ?? [],
-            $results['scores'] ?? []
+            $results['scores'] ?? [],
+            (int) ($results['summary']['total_files'] ?? 0)
         );
 
         // Baseline / diff mode — write a baseline, or compare against one so CI
@@ -295,11 +296,21 @@ class AnalyzeCommand extends Command
             return $baselineNewCount > 0 ? self::FAILURE : self::SUCCESS;
         }
 
-        $critical = $results['summary']['by_severity']['critical']
-            ?? $results['summary']['critical']
-            ?? 0;
+        // A completed analysis is a SUCCESS by default — finding issues is the
+        // whole point, and the dashboard should show "completed", not "failed".
+        // CI gating is explicit and opt-in: use --fail-on / --gate / configured
+        // quality gates (handled above), or enable analysis.fail_on_critical to
+        // restore the old "any critical → non-zero exit" behaviour.
+        if (config('codeguardian.analysis.fail_on_critical', false)) {
+            $critical = $results['summary']['by_severity']['critical']
+                ?? $results['summary']['critical']
+                ?? 0;
+            if ($critical > 0) {
+                return self::FAILURE;
+            }
+        }
 
-        return $critical > 0 ? self::FAILURE : self::SUCCESS;
+        return self::SUCCESS;
     }
 
     /**
@@ -565,14 +576,31 @@ class AnalyzeCommand extends Command
 
     private function resolveMode(): string
     {
-        $explicit = $this->option('mode') ?: config('codeguardian.mode', 'static');
-
-        if ($explicit !== 'static') {
-            return $explicit; // user or config explicitly chose ai / hybrid
+        // An explicit --mode (CLI or the dashboard form) is AUTHORITATIVE and is
+        // never silently upgraded. This is what guarantees `--mode=static` is
+        // truly static — no AI calls, no cost. (Previously an AI key would
+        // auto-upgrade even an explicit --mode=static to hybrid.)
+        $optMode = $this->option('mode');
+        if (is_string($optMode) && trim($optMode) !== '') {
+            return $this->normalizeMode($optMode);
         }
 
-        // Auto-upgrade to hybrid if an AI key is configured
+        // No CLI mode → use config. A non-static config mode is respected as-is.
+        $configMode = $this->normalizeMode((string) config('codeguardian.mode', 'static'));
+        if ($configMode !== 'static') {
+            return $configMode;
+        }
+
+        // Nothing chose a mode explicitly → convenience: use hybrid when an AI
+        // key is present, otherwise static.
         return AiClient::hasApiKey() ? 'hybrid' : 'static';
+    }
+
+    /** Whitelist a mode string; anything unknown falls back to static. */
+    private function normalizeMode(string $mode): string
+    {
+        $mode = strtolower(trim($mode));
+        return in_array($mode, ['static', 'hybrid', 'ai'], true) ? $mode : 'static';
     }
 
     private function engineLabel(string $mode): string

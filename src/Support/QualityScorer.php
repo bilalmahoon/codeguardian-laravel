@@ -40,6 +40,14 @@ final class QualityScorer
     ];
 
     /**
+     * Penalty-per-file at which a size-normalised dimension scores 50/100. Tuned
+     * so a codebase averaging ~one medium-severity issue per file lands mid-band
+     * instead of collapsing to 0 (which is what the old absolute model did on any
+     * large scan — every derived dimension became 0 regardless of real health).
+     */
+    private const DENSITY_MIDPOINT = 4.0;
+
+    /**
      * Categories that make code hard to unit-test (high coupling, branching,
      * size). Used to derive the Testability dimension.
      */
@@ -62,11 +70,14 @@ final class QualityScorer
     ];
 
     /**
-     * @param array<int,array<string,mixed>> $findings   normalised findings (severity, category)
-     * @param array<string,int>              $agentScores e.g. ['architecture_score'=>72, ...]
+     * @param array<int,array<string,mixed>> $findings    normalised findings (severity, category)
+     * @param array<string,int>              $agentScores  e.g. ['architecture_score'=>72, ...]
+     * @param int                            $totalFiles   files scanned; when > 0, dimensions WITHOUT
+     *                                                     an analyzer anchor (testability, reliability)
+     *                                                     are scored by density instead of raw count.
      * @return array{dimensions: array<string,array<string,mixed>>, overall: int, grade: string}
      */
-    public static function assess(array $findings, array $agentScores = []): array
+    public static function assess(array $findings, array $agentScores = [], int $totalFiles = 0): array
     {
         $byCategory = self::bucketByCategory($findings);
 
@@ -76,37 +87,43 @@ final class QualityScorer
             'Architecture',
             $agentScores['architecture_score'] ?? null,
             $byCategory['architecture'] ?? [],
-            'Structure, layering and SOLID adherence'
+            'Structure, layering and SOLID adherence',
+            $totalFiles
         );
         $dimensions['security'] = self::dimension(
             'Security',
             $agentScores['security_score'] ?? null,
             $byCategory['security'] ?? [],
-            'Resistance to the OWASP Top 10 and known weaknesses'
+            'Resistance to the OWASP Top 10 and known weaknesses',
+            $totalFiles
         );
         $dimensions['performance'] = self::dimension(
             'Performance',
             $agentScores['performance_score'] ?? null,
             $byCategory['performance'] ?? [],
-            'Query efficiency, CPU cost and scalability'
+            'Query efficiency, CPU cost and scalability',
+            $totalFiles
         );
         $dimensions['maintainability'] = self::dimension(
             'Maintainability',
             $agentScores['tech_debt_score'] ?? null,
             $byCategory['maintainability'] ?? [],
-            'Complexity, duplication and readability'
+            'Complexity, duplication and readability',
+            $totalFiles
         );
         $dimensions['testability'] = self::dimension(
             'Testability',
             null,
             self::collect($findings, self::TESTABILITY_CATEGORIES),
-            'How easily the code can be unit-tested'
+            'How easily the code can be unit-tested',
+            $totalFiles
         );
         $dimensions['reliability'] = self::dimension(
             'Reliability',
             null,
             self::collect($findings, self::RELIABILITY_CATEGORIES),
-            'Error handling and operational fail-safes'
+            'Error handling and operational fail-safes',
+            $totalFiles
         );
 
         $overall = (int) round(
@@ -126,9 +143,9 @@ final class QualityScorer
      *
      * @param array<int,array<string,mixed>> $findings
      */
-    private static function dimension(string $label, ?int $anchor, array $findings, string $blurb): array
+    private static function dimension(string $label, ?int $anchor, array $findings, string $blurb, int $totalFiles = 0): array
     {
-        $derived = self::scoreFromFindings($findings);
+        $derived = self::scoreFromFindings($findings, $totalFiles);
         $score   = $anchor !== null ? max(0, min(100, $anchor)) : $derived;
 
         $counts = self::severityCounts($findings);
@@ -146,8 +163,17 @@ final class QualityScorer
         ];
     }
 
-    /** @param array<int,array<string,mixed>> $findings */
-    private static function scoreFromFindings(array $findings): int
+    /**
+     * Score a dimension from its findings.
+     *
+     * With a known codebase size ($totalFiles > 0) we score by DENSITY — penalty
+     * per file on a saturating curve — so a big codebase with proportionally few
+     * issues gets a fair score instead of always flooring at 0. Without a size
+     * (small/unknown scope) we keep the legacy absolute model.
+     *
+     * @param array<int,array<string,mixed>> $findings
+     */
+    private static function scoreFromFindings(array $findings, int $totalFiles = 0): int
     {
         $penalty = 0;
         foreach ($findings as $f) {
@@ -155,7 +181,14 @@ final class QualityScorer
             $penalty += self::PENALTY[$sev] ?? 0;
         }
 
-        return max(0, min(100, 100 - $penalty));
+        if ($totalFiles <= 0) {
+            return max(0, min(100, 100 - $penalty));
+        }
+
+        $perFile = $penalty / $totalFiles;
+        $score   = 100 * self::DENSITY_MIDPOINT / (self::DENSITY_MIDPOINT + $perFile);
+
+        return (int) round(max(0, min(100, $score)));
     }
 
     /**

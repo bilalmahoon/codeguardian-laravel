@@ -127,7 +127,7 @@ Test categories to cover (see system prompt for detail):
 - Negative: invalid types, missing required fields, values out of allowed range
 
 Rules:
-- Use RefreshDatabase, model factories, actingAs($user)
+- Use RefreshDatabase, model factories, actingAs(\$user)
 - Assert specific values — not just response status
 - Method names describe the exact scenario: test_user_cannot_update_another_users_profile()
 - All files go in tests/CodeGuardian/ namespace

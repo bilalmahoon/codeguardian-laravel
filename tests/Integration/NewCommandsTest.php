@@ -86,6 +86,60 @@ class NewCommandsTest extends TestCase
             ->assertExitCode(0);
     }
 
+    public function test_explicit_static_mode_never_upgrades_to_ai(): void
+    {
+        // A configured AI key used to silently upgrade even an explicit
+        // --mode=static to hybrid and spend money. It must now stay static.
+        config()->set('codeguardian.provider', 'claude');
+        config()->set('codeguardian.claude.key', 'sk-ant-test-key');
+
+        $this->writeFile('app/Http/Controllers/HomeController.php', <<<'PHP'
+<?php
+namespace App\Http\Controllers;
+class HomeController extends Controller { public function index() { return 1; } }
+PHP);
+
+        $this->artisan("codeguardian:analyze --path={$this->dir} --plain --no-report --mode=static")
+            ->expectsOutputToContain('Static engine')
+            ->assertExitCode(0);
+    }
+
+    public function test_analyze_succeeds_by_default_even_with_a_critical_finding(): void
+    {
+        // Guaranteed critical (raw SQL with variable interpolation).
+        $this->writeFile('app/Http/Controllers/ReportController.php', <<<'PHP'
+<?php
+namespace App\Http\Controllers;
+use Illuminate\Support\Facades\DB;
+class ReportController extends Controller {
+    public function show($id) { return DB::select("SELECT * FROM users WHERE id = $id"); }
+}
+PHP);
+
+        // Default config: a completed analysis is a success (dashboard shows
+        // "completed"), even though it found a critical issue.
+        $this->artisan("codeguardian:analyze --path={$this->dir} --plain --no-report --mode=static")
+            ->expectsOutputToContain('Critical:')
+            ->assertExitCode(0);
+    }
+
+    public function test_analyze_fails_on_critical_when_opted_in(): void
+    {
+        config()->set('codeguardian.analysis.fail_on_critical', true);
+
+        $this->writeFile('app/Http/Controllers/ReportController.php', <<<'PHP'
+<?php
+namespace App\Http\Controllers;
+use Illuminate\Support\Facades\DB;
+class ReportController extends Controller {
+    public function show($id) { return DB::select("SELECT * FROM users WHERE id = $id"); }
+}
+PHP);
+
+        $this->artisan("codeguardian:analyze --path={$this->dir} --plain --no-report --mode=static")
+            ->assertExitCode(1);
+    }
+
     public function test_analyze_quality_gate_fails_when_budget_breached(): void
     {
         config()->set('codeguardian.gates', ['max_total' => 0]);

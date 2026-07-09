@@ -94,6 +94,13 @@ return [
         // Set to 0 to disable the warning.
         'max_files_per_scan' => 2000,
 
+        // When true, `codeguardian:analyze` exits non-zero if ANY critical
+        // finding exists (handy as a hard CI gate). Default false: a completed
+        // analysis is a success — finding issues is the point — so the web
+        // dashboard shows "completed" rather than "failed". For CI gating prefer
+        // the explicit --fail-on / --gate options or configured quality gates.
+        'fail_on_critical' => env('CODEGUARDIAN_FAIL_ON_CRITICAL', false),
+
         // Directories to skip during scanning
         'skip_dirs' => [
             'vendor', 'node_modules', '.git', 'storage', 'bootstrap/cache',

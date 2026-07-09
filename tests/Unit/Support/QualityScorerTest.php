@@ -104,4 +104,35 @@ class QualityScorerTest extends TestCase
         $this->assertSame(0, $result['dimensions']['security']['score']);
         $this->assertGreaterThanOrEqual(0, $result['overall']);
     }
+
+    /**
+     * The old absolute model floored derived dimensions to 0 on any sizeable
+     * codebase (100 - sum-of-penalties). With a known file count they must be
+     * scored by density and stay meaningful instead of collapsing.
+     */
+    public function test_density_scoring_prevents_large_codebase_zero(): void
+    {
+        // 400 low-severity duplication findings (a testability category).
+        $findings = array_fill(0, 400, ['severity' => 'low', 'category' => 'duplication']);
+
+        $absolute = QualityScorer::assess($findings);           // no size → legacy
+        $scaled   = QualityScorer::assess($findings, [], 1000); // size-aware
+
+        $this->assertSame(0, $absolute['dimensions']['testability']['score']);
+        $this->assertGreaterThan(0, $scaled['dimensions']['testability']['score']);
+        $this->assertLessThan(100, $scaled['dimensions']['testability']['score']);
+    }
+
+    public function test_density_scoring_reflects_issue_density(): void
+    {
+        $findings = array_fill(0, 200, ['severity' => 'high', 'category' => 'high_complexity']);
+
+        $sparse = QualityScorer::assess($findings, [], 1000);
+        $dense  = QualityScorer::assess($findings, [], 100);
+
+        $this->assertGreaterThan(
+            $dense['dimensions']['testability']['score'],
+            $sparse['dimensions']['testability']['score']
+        );
+    }
 }
