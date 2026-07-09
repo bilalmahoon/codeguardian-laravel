@@ -47,4 +47,29 @@ class SlackController
             'messages'      => $this->slack->messages($current, 40),
         ]);
     }
+
+    public function show(string $channel, string $ts): Response
+    {
+        if (! $this->slack->configured()) {
+            abort(404);
+        }
+
+        // Only channels the operator whitelisted may be browsed.
+        if (! in_array($channel, array_column($this->slack->channels(), 'id'), true)) {
+            abort(404);
+        }
+
+        $message = $this->slack->message($channel, $ts);
+        if ($message === null) {
+            abort(404, 'Message not found.');
+        }
+
+        return response()->view('codeguardian::integrations.slack.show', [
+            'configured'   => true,
+            'channelId'    => $channel,
+            'channelLabel' => $this->slack->channelLabel($channel),
+            'message'      => $message,
+            'permalink'    => $this->slack->permalink($channel, $ts),
+        ]);
+    }
 }

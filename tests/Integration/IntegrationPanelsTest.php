@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CodeGuardian\Laravel\Tests\Integration;
 
+use CodeGuardian\Laravel\Support\RunStore;
 use CodeGuardian\Laravel\Support\SentryClient;
 use CodeGuardian\Laravel\Support\SlackService;
 use GuzzleHttp\Client;
@@ -151,6 +152,72 @@ class IntegrationPanelsTest extends TestCase
         $this->get('/codeguardian/slack')
             ->assertStatus(200)
             ->assertSee('Production is on fire')
-            ->assertSee('alerts');
+            ->assertSee('alerts')
+            ->assertSee('/codeguardian/slack/C1/1700000100.2', false); // clickable → detail
+    }
+
+    public function test_slack_message_detail_page(): void
+    {
+        // history (single message via latest+inclusive) then chat.getPermalink.
+        $mock = new MockHandler([
+            new Response(200, [], json_encode([
+                'ok' => true,
+                'messages' => [['type' => 'message', 'user' => 'U2', 'text' => 'Payment webhook 500s', 'ts' => '1700000100.2']],
+            ])),
+            new Response(200, [], json_encode(['ok' => true, 'permalink' => 'https://slack.com/archives/C1/p1700000100'])),
+        ]);
+        $client = new Client(['handler' => HandlerStack::create($mock)]);
+        $this->app->bind(SlackService::class, fn() => new SlackService('xoxb', [['id' => 'C1', 'label' => 'alerts']], $client));
+
+        $this->get('/codeguardian/slack/C1/1700000100.2')
+            ->assertStatus(200)
+            ->assertSee('Payment webhook 500s')
+            ->assertSee('Open in Slack');
+    }
+
+    public function test_slack_detail_rejects_unknown_channel(): void
+    {
+        $this->fakeSlack(['ok' => true, 'messages' => []]);
+
+        $this->get('/codeguardian/slack/CHACKER/1700000100.2')->assertStatus(404);
+    }
+
+    // ─── Sentry auto-fix action ─────────────────────────────────────────────
+
+    public function test_sentry_fix_launches_run_and_redirects(): void
+    {
+        $this->fakeSentry([]); // configured client; fix() makes no network calls
+        config()->set('codeguardian.provider', 'claude');
+        config()->set('codeguardian.claude.key', 'sk-test');
+
+        $fake = new class(sys_get_temp_dir(), sys_get_temp_dir()) extends RunStore {
+            public array $launches = [];
+            public function start(string $type, string $artisan, array $options, string $label): string
+            {
+                $this->launches[] = compact('type', 'artisan', 'options', 'label');
+                return 'run-x';
+            }
+        };
+        $this->app->instance(RunStore::class, $fake);
+
+        $this->post('/codeguardian/sentry/42/fix')
+            ->assertRedirect('/codeguardian/runs/run-x');
+
+        $this->assertCount(1, $fake->launches);
+        $this->assertSame('codeguardian:sentry', $fake->launches[0]['artisan']);
+        $this->assertSame('42', $fake->launches[0]['options']['issue']);
+        $this->assertTrue($fake->launches[0]['options']['resolve']);
+    }
+
+    public function test_sentry_fix_without_ai_key_redirects_with_error(): void
+    {
+        $this->fakeSentry([]);
+        config()->set('codeguardian.provider', 'claude');
+        config()->set('codeguardian.claude.key', null);
+        config()->set('codeguardian.openai.key', null);
+        config()->set('codeguardian.gemini.key', null);
+
+        $this->post('/codeguardian/sentry/42/fix')
+            ->assertRedirect('/codeguardian/sentry/42');
     }
 }

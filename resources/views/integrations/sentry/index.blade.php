@@ -77,10 +77,11 @@
             @if(empty($issues))
                 <div class="empty">No issues match these filters. 🎉</div>
             @else
+                <div class="table-wrap">
                 <table>
                     <thead>
                         <tr>
-                            <th>Issue</th><th>Level</th><th>Events</th><th>Users</th><th>Last seen</th>
+                            <th style="min-width:280px">Issue</th><th>Level</th><th>Events</th><th>Users</th><th>Last seen</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -89,16 +90,17 @@
                                 <td>
                                     <a href="{{ route('codeguardian.sentry.show', ['id' => $it['id']]) }}" style="font-weight:600">{{ $it['title'] }}</a>
                                     @if($it['shortId'])<span class="pill type" style="margin-left:6px">{{ $it['shortId'] }}</span>@endif
-                                    @if($it['culprit'])<div class="mono">{{ $it['culprit'] }}</div>@endif
+                                    @if($it['culprit'])<span class="mono">{{ $it['culprit'] }}</span>@endif
                                 </td>
-                                <td><span class="sevtag {{ in_array($it['level'],['fatal','error'])?'high':($it['level']==='warning'?'medium':'low') }}">{{ $it['level'] }}</span></td>
-                                <td>{{ number_format($it['count']) }}</td>
-                                <td>{{ number_format($it['userCount']) }}</td>
-                                <td class="muted">{{ $it['lastSeen'] ? \Illuminate\Support\Carbon::parse($it['lastSeen'])->diffForHumans() : '—' }}</td>
+                                <td class="nowrap"><span class="sevtag {{ in_array($it['level'],['fatal','error'])?'high':($it['level']==='warning'?'medium':'low') }}">{{ $it['level'] }}</span></td>
+                                <td class="nowrap">{{ number_format($it['count']) }}</td>
+                                <td class="nowrap">{{ number_format($it['userCount']) }}</td>
+                                <td class="muted nowrap">{{ $it['lastSeen'] ? \Illuminate\Support\Carbon::parse($it['lastSeen'])->diffForHumans() : '—' }}</td>
                             </tr>
                         @endforeach
                     </tbody>
                 </table>
+                </div>
             @endif
         </div>
         <p class="muted">Tip: use the CLI to auto-fix — <span class="mono">php artisan codeguardian:sentry --fix --apply --with-tests</span></p>

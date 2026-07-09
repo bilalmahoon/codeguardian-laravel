@@ -48,9 +48,20 @@
     @endif
 
     <div class="card">
-        <h2>Next steps</h2>
-        <p class="muted">CodeGuardian can generate a safe, test-verified fix for this exception from the CLI:</p>
+        <h2>Fix this issue</h2>
+        <p class="muted">CodeGuardian can generate a <strong>safe, test-verified</strong> fix for this exception —
+            it writes the change with a backup, runs your tests, rolls back on failure, and resolves the issue in Sentry on success.</p>
+
+        <form method="POST" action="{{ route('codeguardian.sentry.fix', ['id' => $summary['id']]) }}" style="margin:14px 0">
+            @csrf
+            <button type="submit" class="btn"
+                    onclick="return confirm('Run a safe auto-fix for this issue?\n\nIt writes the fix, runs tests, rolls back on failure, and resolves in Sentry on success.');">
+                ▶ Run safe auto-fix
+            </button>
+        </form>
+
+        <p class="muted" style="margin-bottom:6px">Prefer the terminal? Run the same thing from the CLI:</p>
         <div class="console" style="max-height:none">php artisan codeguardian:sentry --issue={{ $summary['id'] }} --fix --apply --with-tests --resolve</div>
-        <p class="hint">Future dashboard actions (resolve, ignore, assign, comment) will appear here.</p>
+        <p class="hint">Future dashboard actions (ignore, assign, comment) will appear here.</p>
     </div>
 @endsection

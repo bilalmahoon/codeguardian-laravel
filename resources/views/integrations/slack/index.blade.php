@@ -37,13 +37,13 @@
                 <div class="empty">No recent messages (or the bot isn't in this channel yet).</div>
             @else
                 @foreach($messages as $m)
-                    <div class="finding">
-                        <div class="loc">{{ $m['user'] }} · {{ $m['time'] }}</div>
-                        <div class="desc" style="color:var(--text); white-space:pre-wrap">{{ $m['text'] }}</div>
-                    </div>
+                    <a class="finding link" href="{{ route('codeguardian.slack.show', ['channel' => $current, 'ts' => $m['ts']]) }}">
+                        <div class="loc">{{ $m['user'] }} · {{ $m['time'] }} <span style="float:right">Open →</span></div>
+                        <div class="desc" style="color:var(--text)">{{ $m['preview'] }}</div>
+                    </a>
                 @endforeach
             @endif
-            <p class="hint">Read-only for now. Future actions (reply, resolve, assign) will appear per message.</p>
+            <p class="hint">Click a message to open its full detail. Future actions (reply, resolve, assign) will appear there.</p>
         </div>
     @endif
 @endsection

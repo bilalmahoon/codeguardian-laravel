@@ -34,8 +34,12 @@
         h1 { font-size: 22px; margin: 24px 0 4px; }
         h2 { font-size: 16px; margin: 0 0 14px; color: var(--text); }
         .muted { color: var(--muted); font-size: 13px; }
+        .table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
         table { width: 100%; border-collapse: collapse; }
-        th, td { text-align: left; padding: 12px 10px; border-bottom: 1px solid var(--border); font-size: 14px; }
+        th, td { text-align: left; padding: 12px 10px; border-bottom: 1px solid var(--border); font-size: 14px;
+            vertical-align: top; }
+        td .mono { word-break: break-word; overflow-wrap: anywhere; white-space: normal; display: block; margin-top: 4px; }
+        td.nowrap { white-space: nowrap; }
         th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
         tr:hover td { background: #ffffff05; }
         .pill { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
@@ -112,6 +116,8 @@
             border-radius: 8px; padding: 6px 12px; font-size: 13px; font-weight: 600; }
         .fbtn.active { border-color: var(--accent); color: var(--accent); }
         .finding { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; background: var(--panel-2); }
+        a.finding.link { display: block; }
+        a.finding.link:hover { border-color: var(--accent); text-decoration: none; background: #5b8cff12; }
         .finding .ttl { font-size: 14px; font-weight: 600; }
         .finding .loc { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 4px; }
         .finding .desc { font-size: 13px; color: var(--muted); margin-top: 8px; }
